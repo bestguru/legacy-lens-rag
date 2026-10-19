@@ -1,0 +1,188 @@
+{
+  "version": "1.0.0",
+  "generated_at": "2026-10-19T15:13:03Z",
+  "total_files": 4,
+  "total_chunks": 13,
+  "elapsed_ms": 10,
+  "chunks": [
+    {
+      "id": "ea1ce8a902d4",
+      "file_path": "code/CommandPolicyEngine.cs",
+      "language": "cs",
+      "symbol": "CommandPolicyEngine",
+      "start_line": 1,
+      "end_line": 29,
+      "rule_ids": [
+        "BR-POL-001"
+      ],
+      "content": "using System;\nusing System.Collections.Concurrent;\nusing System.Collections.Generic;\n\nnamespace TACT.Server.Policy\n{\n    /// \u003csummary\u003e\n    /// Legacy Network Device Command Policy Engine.\n    /// Enforces model-scoped whitelists and blocks destructive CLI commands before reaching SSH/Telnet sessions.\n    /// \u003c/summary\u003e\n    public sealed class CommandPolicyEngine\n    {\n        private readonly ConcurrentDictionary\u003cstring, HashSet\u003cstring\u003e\u003e _modelExactWhitelist =\n            new ConcurrentDictionary\u003cstring, HashSet\u003cstring\u003e\u003e(StringComparer.OrdinalIgnoreCase);\n\n        private readonly ConcurrentDictionary\u003cstring, List\u003cstring\u003e\u003e _modelPrefixRules =\n            new ConcurrentDictionary\u003cstring, List\u003cstring\u003e\u003e(StringComparer.OrdinalIgnoreCase);\n\n        // Hard-coded emergency blocklist across all network equipment models (Rule ID: BR-POL-001)\n        private static readonly string[] GlobalBlockedCommands = new[]\n        {\n            \"reload\",\n            \"write erase\",\n            \"delete flash:\",\n            \"format flash:\",\n            \"request system zeroize\",\n            \"shutdown interface core-uplink\"\n        };",
+      "token_count": 90
+    },
+    {
+      "id": "7063fa23d18b",
+      "file_path": "code/CommandPolicyEngine.cs",
+      "language": "cs",
+      "symbol": "EvaluateCommand",
+      "start_line": 30,
+      "end_line": 90,
+      "rule_ids": [
+        "BR-POL-002",
+        "BR-POL-000",
+        "BR-POL-001",
+        "BR-POL-002A",
+        "BR-POL-002B",
+        "BR-POL-003",
+        "BR-POL-004",
+        "BR-POL-999"
+      ],
+      "content": "/// \u003csummary\u003e\n        /// Business Rule BR-POL-002:\n        /// Privileged configuration mode (\"configure terminal\" or \"system-view\") requires:\n        /// 1. Operator role level \u003e= 3 (NOC Senior or Principal)\n        /// 2. Active bastion session mode == Mode3_KAM_SSH\n        /// 3. Explicit device-model whitelist registration\n        /// \u003c/summary\u003e\n        public PolicyDecision EvaluateCommand(string deviceModel, string commandText, int operatorRoleLevel, string bastionMode)\n        {\n            if (string.IsNullOrWhiteSpace(commandText))\n            {\n                return PolicyDecision.Deny(\"BR-POL-000\", \"Empty command payload is not permitted.\");\n            }\n\n            string normalized = commandText.Trim();\n\n            foreach (var blocked in GlobalBlockedCommands)\n            {\n                if (normalized.StartsWith(blocked, StringComparison.OrdinalIgnoreCase))\n                {\n                    return PolicyDecision.Deny(\"BR-POL-001\", $\"Command '{normalized}' is globally prohibited on production equipment.\");\n                }\n            }\n\n            bool isConfigEntry = normalized.Equals(\"configure terminal\", StringComparison.OrdinalIgnoreCase)\n                              || normalized.Equals(\"conf t\", StringComparison.OrdinalIgnoreCase)\n                              || normalized.Equals(\"system-view\", StringComparison.OrdinalIgnoreCase);\n\n            if (isConfigEntry)\n            {\n                if (operatorRoleLevel \u003c 3)\n                {\n                    return PolicyDecision.Deny(\"BR-POL-002A\", \"Privileged config mode requires OperatorRoleLevel \u003e= 3.\");\n                }\n\n                if (!string.Equals(bastionMode, \"Mode3_KAM_SSH\", StringComparison.OrdinalIgnoreCase))\n                {\n                    return PolicyDecision.Deny(\"BR-POL-002B\", \"Privileged config mode is only allowed over Mode3_KAM_SSH bastion topology.\");\n                }\n            }\n\n            if (_modelExactWhitelist.TryGetValue(deviceModel, out var exactSet) \u0026\u0026 exactSet.Contains(normalized))\n            {\n                return PolicyDecision.Allow(\"BR-POL-003\", \"Matched exact model-scoped whitelist.\");\n            }\n\n            if (_modelPrefixRules.TryGetValue(deviceModel, out var prefixes))\n            {\n                foreach (var prefix in prefixes)\n                {\n                    if (normalized.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))\n                    {\n                        return PolicyDecision.Allow(\"BR-POL-004\", $\"Matched prefix rule '{prefix}' for model {deviceModel}.\");\n                    }\n                }\n            }\n\n            return PolicyDecision.Deny(\"BR-POL-999\", $\"Command '{normalized}' is not whitelisted for device model '{deviceModel}'.\");\n        }\n    }",
+      "token_count": 197
+    },
+    {
+      "id": "ca4673717c36",
+      "file_path": "code/CommandPolicyEngine.cs",
+      "language": "cs",
+      "symbol": "PolicyDecision",
+      "start_line": 91,
+      "end_line": 103,
+      "rule_ids": [],
+      "content": "public sealed class PolicyDecision\n    {\n        public bool IsAllowed { get; }\n        public string RuleId { get; }\n        public string Reason { get; }\n\n        private PolicyDecision(bool isAllowed, string ruleId, string reason)\n        {\n            IsAllowed = isAllowed;\n            RuleId = ruleId;\n            Reason = reason;\n        }",
+      "token_count": 41
+    },
+    {
+      "id": "c3362e0080e5",
+      "file_path": "code/CommandPolicyEngine.cs",
+      "language": "cs",
+      "symbol": "Deny",
+      "start_line": 104,
+      "end_line": 108,
+      "rule_ids": [],
+      "content": "public static PolicyDecision Allow(string ruleId, string reason) =\u003e new PolicyDecision(true, ruleId, reason);\n        public static PolicyDecision Deny(string ruleId, string reason) =\u003e new PolicyDecision(false, ruleId, reason);\n    }\n}",
+      "token_count": 26
+    },
+    {
+      "id": "b42fd5faa1b7",
+      "file_path": "code/RoboAdvisorRebalanceService.java",
+      "language": "java",
+      "symbol": "RoboAdvisorRebalanceService",
+      "start_line": 1,
+      "end_line": 17,
+      "rule_ids": [
+        "BR-FIN-101",
+        "BR-FIN-102"
+      ],
+      "content": "package com.enterprise.wealth.robo;\n\nimport java.math.BigDecimal;\nimport java.math.RoundingMode;\nimport java.util.Map;\n\n/**\n * Legacy Robo-Advisor Portfolio Rebalancing \u0026 Risk Engine.\n * Extracted during Next-Gen Financial Risk Management Modernization.\n */\npublic class RoboAdvisorRebalanceService {\n\n    private static final BigDecimal MAX_EQUITY_CAP_CONSERVATIVE = new BigDecimal(\"0.20\");\n    private static final BigDecimal MAX_EQUITY_CAP_BALANCED = new BigDecimal(\"0.50\");\n    private static final BigDecimal DRIFT_THRESHOLD_TRIGGER = new BigDecimal(\"0.035\"); // 3.5% drift threshold (Rule ID: BR-FIN-101)\n    private static final BigDecimal HIGH_VOLATILITY_VIX_CUTOFF = new BigDecimal(\"28.5\"); // Rule ID: BR-FIN-102",
+      "token_count": 73
+    },
+    {
+      "id": "4e072923afe1",
+      "file_path": "code/RoboAdvisorRebalanceService.java",
+      "language": "java",
+      "symbol": "evaluatePortfolioDrift",
+      "start_line": 18,
+      "end_line": 60,
+      "rule_ids": [
+        "BR-FIN-101",
+        "BR-FIN-102",
+        "BR-FIN-100",
+        "BR-FIN-103"
+      ],
+      "content": "/**\n     * Business Rule BR-FIN-101 \u0026 BR-FIN-102:\n     * Determines whether an automated discretionary pension portfolio requires rebalancing.\n     * - Rebalancing triggers only if absolute asset-class drift \u003e= 3.5% (0.035).\n     * - If market volatility index (VIX) exceeds 28.5, equity buy orders are halted and shifted to sovereign bonds.\n     */\n    public RebalanceDecision evaluatePortfolioDrift(\n            String riskProfile,\n            BigDecimal currentEquityWeight,\n            BigDecimal targetEquityWeight,\n            BigDecimal currentVixIndex) {\n\n        BigDecimal maxAllowedEquity = \"CONSERVATIVE\".equalsIgnoreCase(riskProfile)\n                ? MAX_EQUITY_CAP_CONSERVATIVE\n                : MAX_EQUITY_CAP_BALANCED;\n\n        if (currentEquityWeight.compareTo(maxAllowedEquity) \u003e 0) {\n            return new RebalanceDecision(\n                    true,\n                    \"BR-FIN-100\",\n                    \"FORCE_DELEVERAGE_EQUITY\",\n                    currentEquityWeight.subtract(maxAllowedEquity).setScale(4, RoundingMode.HALF_UP)\n            );\n        }\n\n        BigDecimal absoluteDrift = currentEquityWeight.subtract(targetEquityWeight).abs();\n        if (absoluteDrift.compareTo(DRIFT_THRESHOLD_TRIGGER) \u003c 0) {\n            return new RebalanceDecision(false, \"BR-FIN-101\", \"HOLD_WITHIN_DRIFT_BAND\", absoluteDrift);\n        }\n\n        if (currentVixIndex.compareTo(HIGH_VOLATILITY_VIX_CUTOFF) \u003e 0\n                \u0026\u0026 currentEquityWeight.compareTo(targetEquityWeight) \u003c 0) {\n            return new RebalanceDecision(\n                    false,\n                    \"BR-FIN-102\",\n                    \"HALT_EQUITY_BUY_VIX_CIRCUIT_BREAKER\",\n                    absoluteDrift\n            );\n        }\n\n        return new RebalanceDecision(true, \"BR-FIN-103\", \"EXECUTE_STANDARD_REBALANCE\", absoluteDrift);\n    }",
+      "token_count": 125
+    },
+    {
+      "id": "bdb930792057",
+      "file_path": "code/RoboAdvisorRebalanceService.java",
+      "language": "java",
+      "symbol": "RebalanceDecision",
+      "start_line": 61,
+      "end_line": 80,
+      "rule_ids": [],
+      "content": "public static final class RebalanceDecision {\n        private final boolean rebalanceRequired;\n        private final String ruleId;\n        private final String actionCode;\n        private final BigDecimal metricValue;\n\n        public RebalanceDecision(boolean rebalanceRequired, String ruleId, String actionCode, BigDecimal metricValue) {\n            this.rebalanceRequired = rebalanceRequired;\n            this.ruleId = ruleId;\n            this.actionCode = actionCode;\n            this.metricValue = metricValue;\n        }\n\n        public boolean isRebalanceRequired() { return rebalanceRequired; }\n        public String getRuleId() { return ruleId; }\n        public String getActionCode() { return actionCode; }\n        public BigDecimal getMetricValue() { return metricValue; }\n    }\n}",
+      "token_count": 75
+    },
+    {
+      "id": "2d29bb411c54",
+      "file_path": "llm-wiki/ADR-001-Three-Lane-Dataflow-Pipeline.md",
+      "language": "markdown",
+      "symbol": "ADR-001: Re-Architecting Server Request Pipeline onto 3-Lane TPL Dataflow",
+      "start_line": 1,
+      "end_line": 7,
+      "rule_ids": [
+        "ADR-001",
+        "BR-SRV-301",
+        "BR-SRV-302",
+        "BR-SRV-303"
+      ],
+      "content": "# ADR-001: Re-Architecting Server Request Pipeline onto 3-Lane TPL Dataflow\n\n- **Status:** Accepted\n- **Date:** 2026-05-14\n- **Domain:** TACT Server Concurrency \u0026 Request Routing\n- **Related Rules:** `BR-SRV-301`, `BR-SRV-302`, `BR-SRV-303`",
+      "token_count": 30
+    },
+    {
+      "id": "ca3fb30242b7",
+      "file_path": "llm-wiki/ADR-001-Three-Lane-Dataflow-Pipeline.md",
+      "language": "markdown",
+      "symbol": "Decision",
+      "start_line": 8,
+      "end_line": 30,
+      "rule_ids": [
+        "BR-SRV-301",
+        "BR-SRV-302",
+        "BR-SRV-303"
+      ],
+      "content": "## Context\n\nThe legacy `ClientResponseProcess` processed all incoming client socket packets through a single serialized thread and global lock (`lock(_syncRoot)`). When long-running database queries or equipment configuration scripts executed, real-time control heartbeats and operator UI queries stalled, causing cascading session timeouts across NOC terminals.\n\n## Decision\n\nWe replaced the single serialized queue with a **3-Lane TPL Dataflow (`ActionBlock\u003cRequestEnvelope\u003e`) Pipeline**, routing each request based on its operational semantics:\n\n1. **Control Lane (`BR-SRV-301`):**\n   - **Target:** Session authentication, KeepAlive heartbeats, emergency disconnect signals.\n   - **Concurrency (`MaxDegreeOfParallelism`):** `Environment.ProcessorCount` (1x CPU cores).\n   - **Rationale:** Control signals are CPU-light and latency-critical; they must never queue behind DB queries.\n\n2. **Query Lane (`BR-SRV-302`):**\n   - **Target:** Read-only device topology lookups, group tree queries, command history search via Dapper.\n   - **Concurrency (`MaxDegreeOfParallelism`):** `Environment.ProcessorCount * 2` (2x CPU cores).\n   - **Rationale:** I/O-bound SQL Server operations spend most time awaiting network I/O; 2x core parallelism maximizes throughput without exhausting the Dapper connection pool.\n\n3. **Mutation Lane (`BR-SRV-303`):**\n   - **Target:** Device state changes, policy table updates, credential rotation, audit log commits.\n   - **Concurrency (`MaxDegreeOfParallelism`):** `1` (`MaxDOP = 1`, strictly sequential).\n   - **Rationale:** State mutations require strict causal ordering and transactional consistency. Parallelizing mutations risks race conditions on device session locks.",
+      "token_count": 198
+    },
+    {
+      "id": "ea0d08a049ec",
+      "file_path": "llm-wiki/ADR-001-Three-Lane-Dataflow-Pipeline.md",
+      "language": "markdown",
+      "symbol": "Consequences",
+      "start_line": 31,
+      "end_line": 35,
+      "rule_ids": [],
+      "content": "## Consequences\n\n- **Throughput \u0026 Latency:** P99 control packet latency dropped by 84% under heavy query load; global lock contention was eliminated using `ConcurrentDictionary`.\n- **Verification:** Validated by `RACTServerConcurrencyVerify` harness across 10,000 synthetic concurrent packets with zero ordering violations.",
+      "token_count": 39
+    },
+    {
+      "id": "3b517affd5a4",
+      "file_path": "llm-wiki/ADR-002-Headless-VT-Engine-Architecture.md",
+      "language": "markdown",
+      "symbol": "ADR-002: Decoupling Terminal Protocol State into a Headless VT100/ANSI Engine",
+      "start_line": 1,
+      "end_line": 7,
+      "rule_ids": [
+        "ADR-002",
+        "BR-TERM-201",
+        "BR-TERM-202"
+      ],
+      "content": "# ADR-002: Decoupling Terminal Protocol State into a Headless VT100/ANSI Engine\n\n- **Status:** Accepted\n- **Date:** 2026-06-29\n- **Domain:** TACT Client Terminal Emulation \u0026 Device Automation\n- **Related Rules:** `BR-TERM-201`, `BR-TERM-202`",
+      "token_count": 31
+    },
+    {
+      "id": "0dce45e5605f",
+      "file_path": "llm-wiki/ADR-002-Headless-VT-Engine-Architecture.md",
+      "language": "markdown",
+      "symbol": "Context",
+      "start_line": 8,
+      "end_line": 14,
+      "rule_ids": [
+        "BR-TERM-201"
+      ],
+      "content": "## Context\n\nIn the legacy WinForms client, SSH/Telnet byte streams were fed directly into a commercial third-party UI terminal control. Automated batch scripts (such as 116-step router provisioning) relied on UI thread timers and synchronous `Control.Refresh()` calls inside sub-50ms polling loops (`BR-TERM-201`). This caused:\n1. Full-screen GDI+ repaints on every poll iteration, pegging a CPU core at 100%.\n2. Non-deterministic prompt detection failures whenever the Windows message pump was delayed by user window dragging or modal dialogs.\n3. Zero ability to run automated regression tests in headless CI environments.",
+      "token_count": 89
+    },
+    {
+      "id": "820cfbd13bbf",
+      "file_path": "llm-wiki/ADR-002-Headless-VT-Engine-Architecture.md",
+      "language": "markdown",
+      "symbol": "Decision",
+      "start_line": 15,
+      "end_line": 22,
+      "rule_ids": [
+        "BR-TERM-202"
+      ],
+      "content": "## Decision\n\nWe designed and implemented a **Headless VT100/ANSI State Machine Engine (`HeadlessVtEngine`)** that owns all protocol parsing, scrollback buffer state, and prompt-matching logic (`BR-TERM-202`):\n\n- **Protocol Ownership:** The headless engine consumes raw SSH/Telnet byte streams on a background worker, processes ANSI escape sequences, and evaluates prompt-wait predicates deterministically without touching the WinForms UI thread.\n- **UI Demotion:** The visible WinForms control is demoted to a passive render surface that invalidates at a capped frame rate (30 FPS coalesced render) rather than synchronous `Refresh()` per packet.\n- **Benchmark Proof:** A 116-step equipment configuration script (58 command sends + 58 prompt waits) completed in **4,858 ms end-to-end** inside the `RACTTerminalScriptVerify` harness with zero UI thread dependency.",
+      "token_count": 115
+    }
+  ]
+}
