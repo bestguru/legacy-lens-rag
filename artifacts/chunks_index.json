@@ -1,31 +1,204 @@
 {
   "version": "1.0.0",
-  "generated_at": "2026-10-19T15:13:03Z",
-  "total_files": 4,
-  "total_chunks": 13,
-  "elapsed_ms": 10,
+  "generated_at": "2026-10-19T16:11:44Z",
+  "total_files": 6,
+  "total_chunks": 24,
+  "elapsed_ms": 9,
   "chunks": [
     {
-      "id": "ea1ce8a902d4",
+      "id": "77ddba93ae77",
+      "file_path": "code/AuditLogBatchWriter.cs",
+      "language": "cs",
+      "symbol": "AuditLogBatchWriter",
+      "parent_symbol": "AuditLogBatchWriter",
+      "start_line": 1,
+      "end_line": 6,
+      "rule_ids": [],
+      "symbols_defined": [
+        "AuditLogBatchWriter"
+      ],
+      "symbols_referenced": [
+        "TACT",
+        "Server",
+        "DataAccess"
+      ],
+      "content": "using System;\nusing System.Collections.Generic;\nusing System.Data;\n\nnamespace TACT.Server.DataAccess\n{",
+      "token_count": 9
+    },
+    {
+      "id": "c833456f924d",
+      "file_path": "code/AuditLogBatchWriter.cs",
+      "language": "cs",
+      "symbol": "AuditLogBatchWriter",
+      "parent_symbol": "AuditLogBatchWriter",
+      "start_line": 7,
+      "end_line": 17,
+      "rule_ids": [
+        "ADR-001",
+        "BR-DB-501",
+        "BR-DB-502"
+      ],
+      "symbols_defined": [
+        "AuditLogBatchWriter",
+        "ADR-001",
+        "BR-DB-501",
+        "BR-DB-502"
+      ],
+      "symbols_referenced": [
+        "High",
+        "Dapper",
+        "Replaces",
+        "Runs",
+        "Mutation",
+        "Lane",
+        "MaxDOP",
+        "MAX_BATCH_SIZE",
+        "COMMAND_TIMEOUT_SECONDS",
+        "PROVIDER_ENGINE",
+        "Dapper_SqlConnection_ExplicitFactory",
+        "ADR-001",
+        "BR-DB-501",
+        "BR-DB-502"
+      ],
+      "content": "/// \u003csummary\u003e\n    /// High-throughput Dapper connection factory \u0026 audit log writer.\n    /// Replaces legacy OLE DB connection pool that suffered from handle leaks under burst load.\n    /// Runs on the Mutation Lane (MaxDOP = 1) defined in ADR-001.\n    /// \u003c/summary\u003e\n    public sealed class AuditLogBatchWriter\n    {\n        private const int MAX_BATCH_SIZE = 250;                  // Rule ID: BR-DB-501\n        private const int COMMAND_TIMEOUT_SECONDS = 5;           // Rule ID: BR-DB-502\n        private const string PROVIDER_ENGINE = \"Dapper_SqlConnection_ExplicitFactory\";",
+      "token_count": 71
+    },
+    {
+      "id": "089543de2c9e",
+      "file_path": "code/AuditLogBatchWriter.cs",
+      "language": "cs",
+      "symbol": "AuditLogBatchWriter.ValidateBatchFlushPolicy",
+      "parent_symbol": "AuditLogBatchWriter",
+      "start_line": 18,
+      "end_line": 40,
+      "rule_ids": [
+        "BR-DB-501",
+        "BR-DB-502"
+      ],
+      "symbols_defined": [
+        "AuditLogBatchWriter.ValidateBatchFlushPolicy",
+        "AuditLogBatchWriter",
+        "BR-DB-501",
+        "BR-DB-502"
+      ],
+      "symbols_referenced": [
+        "Dapper",
+        "SqlConnection",
+        "OleDbConnection",
+        "Equals",
+        "Legacy_OleDb_Pool",
+        "Violation",
+        "MAX_BATCH_SIZE",
+        "BR-DB-501",
+        "BR-DB-502"
+      ],
+      "content": "/// \u003csummary\u003e\n        /// Business Rule BR-DB-501 \u0026 BR-DB-502:\n        /// All command execution audit logs must be flushed in deterministic batches of \u003c= 250 records\n        /// with a strict 5-second command timeout over an explicit Dapper SqlConnection factory,\n        /// completely bypassing the deprecated OleDbConnection pool.\n        /// \u003c/summary\u003e\n        public int ValidateBatchFlushPolicy(int pendingRecordCount, string connectionProvider)\n        {\n            if (string.Equals(connectionProvider, \"Legacy_OleDb_Pool\", StringComparison.OrdinalIgnoreCase))\n            {\n                throw new InvalidOperationException(\"BR-DB-501 Violation: Legacy_OleDb_Pool is prohibited due to connection leak risk.\");\n            }\n\n            if (pendingRecordCount \u003c= 0)\n            {\n                return 0;\n            }\n\n            return Math.Min(pendingRecordCount, MAX_BATCH_SIZE);\n        }\n    }\n}",
+      "token_count": 85
+    },
+    {
+      "id": "06cc1a497641",
       "file_path": "code/CommandPolicyEngine.cs",
       "language": "cs",
       "symbol": "CommandPolicyEngine",
+      "parent_symbol": "CommandPolicyEngine",
       "start_line": 1,
+      "end_line": 6,
+      "rule_ids": [],
+      "symbols_defined": [
+        "CommandPolicyEngine"
+      ],
+      "symbols_referenced": [
+        "Concurrent",
+        "TACT",
+        "Server",
+        "Policy"
+      ],
+      "content": "using System;\nusing System.Collections.Concurrent;\nusing System.Collections.Generic;\n\nnamespace TACT.Server.Policy\n{",
+      "token_count": 9
+    },
+    {
+      "id": "4d9fd42b3c8c",
+      "file_path": "code/CommandPolicyEngine.cs",
+      "language": "cs",
+      "symbol": "CommandPolicyEngine",
+      "parent_symbol": "CommandPolicyEngine",
+      "start_line": 7,
       "end_line": 29,
       "rule_ids": [
         "BR-POL-001"
       ],
-      "content": "using System;\nusing System.Collections.Concurrent;\nusing System.Collections.Generic;\n\nnamespace TACT.Server.Policy\n{\n    /// \u003csummary\u003e\n    /// Legacy Network Device Command Policy Engine.\n    /// Enforces model-scoped whitelists and blocks destructive CLI commands before reaching SSH/Telnet sessions.\n    /// \u003c/summary\u003e\n    public sealed class CommandPolicyEngine\n    {\n        private readonly ConcurrentDictionary\u003cstring, HashSet\u003cstring\u003e\u003e _modelExactWhitelist =\n            new ConcurrentDictionary\u003cstring, HashSet\u003cstring\u003e\u003e(StringComparer.OrdinalIgnoreCase);\n\n        private readonly ConcurrentDictionary\u003cstring, List\u003cstring\u003e\u003e _modelPrefixRules =\n            new ConcurrentDictionary\u003cstring, List\u003cstring\u003e\u003e(StringComparer.OrdinalIgnoreCase);\n\n        // Hard-coded emergency blocklist across all network equipment models (Rule ID: BR-POL-001)\n        private static readonly string[] GlobalBlockedCommands = new[]\n        {\n            \"reload\",\n            \"write erase\",\n            \"delete flash:\",\n            \"format flash:\",\n            \"request system zeroize\",\n            \"shutdown interface core-uplink\"\n        };",
-      "token_count": 90
+      "symbols_defined": [
+        "CommandPolicyEngine",
+        "BR-POL-001"
+      ],
+      "symbols_referenced": [
+        "Legacy",
+        "Network",
+        "Device",
+        "Command",
+        "Policy",
+        "Engine",
+        "Enforces",
+        "Telnet",
+        "Hard",
+        "GlobalBlockedCommands",
+        "BR-POL-001"
+      ],
+      "content": "/// \u003csummary\u003e\n    /// Legacy Network Device Command Policy Engine.\n    /// Enforces model-scoped whitelists and blocks destructive CLI commands before reaching SSH/Telnet sessions.\n    /// \u003c/summary\u003e\n    public sealed class CommandPolicyEngine\n    {\n        private readonly ConcurrentDictionary\u003cstring, HashSet\u003cstring\u003e\u003e _modelExactWhitelist =\n            new ConcurrentDictionary\u003cstring, HashSet\u003cstring\u003e\u003e(StringComparer.OrdinalIgnoreCase);\n\n        private readonly ConcurrentDictionary\u003cstring, List\u003cstring\u003e\u003e _modelPrefixRules =\n            new ConcurrentDictionary\u003cstring, List\u003cstring\u003e\u003e(StringComparer.OrdinalIgnoreCase);\n\n        // Hard-coded emergency blocklist across all network equipment models (Rule ID: BR-POL-001)\n        private static readonly string[] GlobalBlockedCommands = new[]\n        {\n            \"reload\",\n            \"write erase\",\n            \"delete flash:\",\n            \"format flash:\",\n            \"request system zeroize\",\n            \"shutdown interface core-uplink\"\n        };",
+      "token_count": 81
     },
     {
       "id": "7063fa23d18b",
       "file_path": "code/CommandPolicyEngine.cs",
       "language": "cs",
-      "symbol": "EvaluateCommand",
+      "symbol": "CommandPolicyEngine.EvaluateCommand",
+      "parent_symbol": "CommandPolicyEngine",
       "start_line": 30,
       "end_line": 90,
       "rule_ids": [
+        "BR-POL-002",
+        "BR-POL-000",
+        "BR-POL-001",
+        "BR-POL-002A",
+        "BR-POL-002B",
+        "BR-POL-003",
+        "BR-POL-004",
+        "BR-POL-999"
+      ],
+      "symbols_defined": [
+        "CommandPolicyEngine.EvaluateCommand",
+        "CommandPolicyEngine",
+        "BR-POL-002",
+        "BR-POL-000",
+        "BR-POL-001",
+        "BR-POL-002A",
+        "BR-POL-002B",
+        "BR-POL-003",
+        "BR-POL-004",
+        "BR-POL-999"
+      ],
+      "symbols_referenced": [
+        "Privileged",
+        "Operator",
+        "Senior",
+        "Principal",
+        "Active",
+        "Mode3_KAM_SSH",
+        "Explicit",
+        "PolicyDecision",
+        "IsNullOrWhiteSpace",
+        "Deny",
+        "Empty",
+        "Trim",
+        "GlobalBlockedCommands",
+        "StartsWith",
+        "Command",
+        "Equals",
+        "OperatorRoleLevel",
+        "TryGetValue",
+        "Contains",
+        "Allow",
+        "Matched",
         "BR-POL-002",
         "BR-POL-000",
         "BR-POL-001",
@@ -43,9 +216,18 @@
       "file_path": "code/CommandPolicyEngine.cs",
       "language": "cs",
       "symbol": "PolicyDecision",
+      "parent_symbol": "PolicyDecision",
       "start_line": 91,
       "end_line": 103,
       "rule_ids": [],
+      "symbols_defined": [
+        "PolicyDecision"
+      ],
+      "symbols_referenced": [
+        "IsAllowed",
+        "RuleId",
+        "Reason"
+      ],
       "content": "public sealed class PolicyDecision\n    {\n        public bool IsAllowed { get; }\n        public string RuleId { get; }\n        public string Reason { get; }\n\n        private PolicyDecision(bool isAllowed, string ruleId, string reason)\n        {\n            IsAllowed = isAllowed;\n            RuleId = ruleId;\n            Reason = reason;\n        }",
       "token_count": 41
     },
@@ -53,35 +235,259 @@
       "id": "c3362e0080e5",
       "file_path": "code/CommandPolicyEngine.cs",
       "language": "cs",
-      "symbol": "Deny",
+      "symbol": "PolicyDecision.Deny",
+      "parent_symbol": "PolicyDecision",
       "start_line": 104,
       "end_line": 108,
       "rule_ids": [],
+      "symbols_defined": [
+        "PolicyDecision.Deny",
+        "PolicyDecision"
+      ],
+      "symbols_referenced": [
+        "Allow"
+      ],
       "content": "public static PolicyDecision Allow(string ruleId, string reason) =\u003e new PolicyDecision(true, ruleId, reason);\n        public static PolicyDecision Deny(string ruleId, string reason) =\u003e new PolicyDecision(false, ruleId, reason);\n    }\n}",
       "token_count": 26
     },
     {
-      "id": "b42fd5faa1b7",
+      "id": "727161524aee",
+      "file_path": "code/LegacyTelnetSessionManager.cs",
+      "language": "cs",
+      "symbol": "LegacyTelnetSessionManager",
+      "parent_symbol": "LegacyTelnetSessionManager",
+      "start_line": 1,
+      "end_line": 7,
+      "rule_ids": [],
+      "symbols_defined": [
+        "LegacyTelnetSessionManager"
+      ],
+      "symbols_referenced": [
+        "Sockets",
+        "TACT",
+        "Server",
+        "Transport"
+      ],
+      "content": "using System;\nusing System.Net.Sockets;\nusing System.Threading;\nusing System.Threading.Tasks;\n\nnamespace TACT.Server.Transport\n{",
+      "token_count": 11
+    },
+    {
+      "id": "fff542278eee",
+      "file_path": "code/LegacyTelnetSessionManager.cs",
+      "language": "cs",
+      "symbol": "LegacyTelnetSessionManager",
+      "parent_symbol": "LegacyTelnetSessionManager",
+      "start_line": 8,
+      "end_line": 18,
+      "rule_ids": [
+        "ADR-001",
+        "ADR-002",
+        "BR-NET-401",
+        "BR-NET-402"
+      ],
+      "symbols_defined": [
+        "LegacyTelnetSessionManager",
+        "ADR-001",
+        "ADR-002",
+        "BR-NET-401",
+        "BR-NET-402"
+      ],
+      "symbols_referenced": [
+        "Manages",
+        "Mode",
+        "Bastion",
+        "Telnet",
+        "Cooperates",
+        "CommandPolicyEngine",
+        "DEFAULT_IDLE_TIMEOUT_SEC",
+        "BASTION_KEEPALIVE_INTERVAL_MS",
+        "MAX_RECONNECT_ATTEMPTS",
+        "ADR-001",
+        "ADR-002",
+        "BR-NET-401",
+        "BR-NET-402"
+      ],
+      "content": "/// \u003csummary\u003e\n    /// Manages Mode 3 KAM SSH Bastion dual-topology routing and legacy Telnet fallback sessions.\n    /// Cooperates with CommandPolicyEngine before dispatching privileged frames.\n    /// See also: ADR-001, ADR-002.\n    /// \u003c/summary\u003e\n    public sealed class LegacyTelnetSessionManager\n    {\n        private const int DEFAULT_IDLE_TIMEOUT_SEC = 180;\n        private const int BASTION_KEEPALIVE_INTERVAL_MS = 15000; // 15s heartbeat (Rule ID: BR-NET-401)\n        private const int MAX_RECONNECT_ATTEMPTS = 3;            // Rule ID: BR-NET-402",
+      "token_count": 64
+    },
+    {
+      "id": "d21297b2ed79",
+      "file_path": "code/LegacyTelnetSessionManager.cs",
+      "language": "cs",
+      "symbol": "LegacyTelnetSessionManager.EvaluateLocalDebugConsole",
+      "parent_symbol": "LegacyTelnetSessionManager",
+      "start_line": 19,
+      "end_line": 27,
+      "rule_ids": [
+        "BR-DBG-009"
+      ],
+      "symbols_defined": [
+        "LegacyTelnetSessionManager.EvaluateLocalDebugConsole",
+        "LegacyTelnetSessionManager",
+        "BR-DBG-009"
+      ],
+      "symbols_referenced": [
+        "Distractor",
+        "Local",
+        "Loopback_Debug",
+        "Equals",
+        "BR-DBG-009"
+      ],
+      "content": "/// \u003csummary\u003e\n        /// Distractor method: evaluates legacy local debug console permissions (NOT production equipment).\n        /// Local debug console allows role level \u003e= 1 on Loopback_Debug mode (Rule ID: BR-DBG-009).\n        /// \u003c/summary\u003e\n        public bool EvaluateLocalDebugConsole(int operatorRoleLevel, string mode)\n        {\n            return operatorRoleLevel \u003e= 1 \u0026\u0026 string.Equals(mode, \"Loopback_Debug\", StringComparison.OrdinalIgnoreCase);\n        }",
+      "token_count": 47
+    },
+    {
+      "id": "f1b85a40c8c4",
+      "file_path": "code/LegacyTelnetSessionManager.cs",
+      "language": "cs",
+      "symbol": "LegacyTelnetSessionManager.ResolveBastionTopology",
+      "parent_symbol": "LegacyTelnetSessionManager",
+      "start_line": 28,
+      "end_line": 60,
+      "rule_ids": [
+        "BR-NET-401",
+        "BR-NET-402"
+      ],
+      "symbols_defined": [
+        "LegacyTelnetSessionManager.ResolveBastionTopology",
+        "LegacyTelnetSessionManager",
+        "BR-NET-401",
+        "BR-NET-402"
+      ],
+      "symbols_referenced": [
+        "Resolves",
+        "Mode3_KAM_SSH",
+        "KeepAlive",
+        "MAX_RECONNECT_ATTEMPTS",
+        "Legacy_Bastion_V2",
+        "Invokes",
+        "CommandPolicyEngine",
+        "EvaluateCommand",
+        "BastionRouteResult",
+        "BASTION_KEEPALIVE_INTERVAL_MS",
+        "StartsWith",
+        "CORE",
+        "Dual_Coexistence_SSH",
+        "Routed",
+        "BR-NET-401",
+        "BR-NET-402"
+      ],
+      "content": "/// \u003csummary\u003e\n        /// Business Rule BR-NET-401 \u0026 BR-NET-402:\n        /// Resolves dual-bastion routing path during zero-downtime migration.\n        /// - Primary path uses Mode3_KAM_SSH with a 15,000ms (15s) KeepAlive heartbeat interval.\n        /// - If primary bastion handshake fails, retries up to 3 times (MAX_RECONNECT_ATTEMPTS = 3)\n        ///   with exponential backoff before failing over to Legacy_Bastion_V2.\n        /// - Invokes CommandPolicyEngine.EvaluateCommand prior to opening configuration channels.\n        /// \u003c/summary\u003e\n        public BastionRouteResult ResolveBastionTopology(string deviceGroupCode, int failedAttempts, bool requireConfigChannel)\n        {\n            if (failedAttempts \u003e= MAX_RECONNECT_ATTEMPTS)\n            {\n                return new BastionRouteResult(\n                    \"Legacy_Bastion_V2\",\n                    BASTION_KEEPALIVE_INTERVAL_MS,\n                    \"BR-NET-402\",\n                    \"Primary KAM SSH exceeded 3 reconnect attempts; failed over to Legacy_Bastion_V2.\"\n                );\n            }\n\n            string selectedTopology = deviceGroupCode.StartsWith(\"CORE-\", StringComparison.OrdinalIgnoreCase)\n                ? \"Mode3_KAM_SSH\"\n                : \"Dual_Coexistence_SSH\";\n\n            return new BastionRouteResult(\n                selectedTopology,\n                BASTION_KEEPALIVE_INTERVAL_MS,\n                \"BR-NET-401\",\n                $\"Routed via {selectedTopology} with {BASTION_KEEPALIVE_INTERVAL_MS}ms KeepAlive heartbeat.\"\n            );\n        }\n    }",
+      "token_count": 122
+    },
+    {
+      "id": "2ee5aca72a82",
+      "file_path": "code/LegacyTelnetSessionManager.cs",
+      "language": "cs",
+      "symbol": "BastionRouteResult",
+      "parent_symbol": "BastionRouteResult",
+      "start_line": 61,
+      "end_line": 77,
+      "rule_ids": [],
+      "symbols_defined": [
+        "BastionRouteResult"
+      ],
+      "symbols_referenced": [
+        "Topology",
+        "KeepAliveIntervalMs",
+        "RuleId",
+        "AuditNote"
+      ],
+      "content": "public sealed class BastionRouteResult\n    {\n        public string Topology { get; }\n        public int KeepAliveIntervalMs { get; }\n        public string RuleId { get; }\n        public string AuditNote { get; }\n\n        public BastionRouteResult(string topology, int keepAliveIntervalMs, string ruleId, string auditNote)\n        {\n            Topology = topology;\n            KeepAliveIntervalMs = keepAliveIntervalMs;\n            RuleId = ruleId;\n            AuditNote = auditNote;\n        }\n    }\n}",
+      "token_count": 54
+    },
+    {
+      "id": "83a46482972c",
       "file_path": "code/RoboAdvisorRebalanceService.java",
       "language": "java",
       "symbol": "RoboAdvisorRebalanceService",
+      "parent_symbol": "RoboAdvisorRebalanceService",
       "start_line": 1,
+      "end_line": 6,
+      "rule_ids": [],
+      "symbols_defined": [
+        "RoboAdvisorRebalanceService"
+      ],
+      "symbols_referenced": [],
+      "content": "package com.enterprise.wealth.robo;\n\nimport java.math.BigDecimal;\nimport java.math.RoundingMode;\nimport java.util.Map;",
+      "token_count": 8
+    },
+    {
+      "id": "dd4c6f9e94ad",
+      "file_path": "code/RoboAdvisorRebalanceService.java",
+      "language": "java",
+      "symbol": "RoboAdvisorRebalanceService",
+      "parent_symbol": "RoboAdvisorRebalanceService",
+      "start_line": 7,
       "end_line": 17,
       "rule_ids": [
         "BR-FIN-101",
         "BR-FIN-102"
       ],
-      "content": "package com.enterprise.wealth.robo;\n\nimport java.math.BigDecimal;\nimport java.math.RoundingMode;\nimport java.util.Map;\n\n/**\n * Legacy Robo-Advisor Portfolio Rebalancing \u0026 Risk Engine.\n * Extracted during Next-Gen Financial Risk Management Modernization.\n */\npublic class RoboAdvisorRebalanceService {\n\n    private static final BigDecimal MAX_EQUITY_CAP_CONSERVATIVE = new BigDecimal(\"0.20\");\n    private static final BigDecimal MAX_EQUITY_CAP_BALANCED = new BigDecimal(\"0.50\");\n    private static final BigDecimal DRIFT_THRESHOLD_TRIGGER = new BigDecimal(\"0.035\"); // 3.5% drift threshold (Rule ID: BR-FIN-101)\n    private static final BigDecimal HIGH_VOLATILITY_VIX_CUTOFF = new BigDecimal(\"28.5\"); // Rule ID: BR-FIN-102",
-      "token_count": 73
+      "symbols_defined": [
+        "RoboAdvisorRebalanceService",
+        "BR-FIN-101",
+        "BR-FIN-102"
+      ],
+      "symbols_referenced": [
+        "Legacy",
+        "Robo",
+        "Advisor",
+        "Portfolio",
+        "Rebalancing",
+        "Risk",
+        "Engine",
+        "Extracted",
+        "Next",
+        "Financial",
+        "Management",
+        "Modernization",
+        "MAX_EQUITY_CAP_CONSERVATIVE",
+        "MAX_EQUITY_CAP_BALANCED",
+        "DRIFT_THRESHOLD_TRIGGER",
+        "HIGH_VOLATILITY_VIX_CUTOFF",
+        "BR-FIN-101",
+        "BR-FIN-102"
+      ],
+      "content": "/**\n * Legacy Robo-Advisor Portfolio Rebalancing \u0026 Risk Engine.\n * Extracted during Next-Gen Financial Risk Management Modernization.\n */\npublic class RoboAdvisorRebalanceService {\n\n    private static final BigDecimal MAX_EQUITY_CAP_CONSERVATIVE = new BigDecimal(\"0.20\");\n    private static final BigDecimal MAX_EQUITY_CAP_BALANCED = new BigDecimal(\"0.50\");\n    private static final BigDecimal DRIFT_THRESHOLD_TRIGGER = new BigDecimal(\"0.035\"); // 3.5% drift threshold (Rule ID: BR-FIN-101)\n    private static final BigDecimal HIGH_VOLATILITY_VIX_CUTOFF = new BigDecimal(\"28.5\"); // Rule ID: BR-FIN-102",
+      "token_count": 65
     },
     {
       "id": "4e072923afe1",
       "file_path": "code/RoboAdvisorRebalanceService.java",
       "language": "java",
-      "symbol": "evaluatePortfolioDrift",
+      "symbol": "RoboAdvisorRebalanceService.evaluatePortfolioDrift",
+      "parent_symbol": "RoboAdvisorRebalanceService",
       "start_line": 18,
       "end_line": 60,
       "rule_ids": [
+        "BR-FIN-101",
+        "BR-FIN-102",
+        "BR-FIN-100",
+        "BR-FIN-103"
+      ],
+      "symbols_defined": [
+        "RoboAdvisorRebalanceService.evaluatePortfolioDrift",
+        "RoboAdvisorRebalanceService",
+        "BR-FIN-101",
+        "BR-FIN-102",
+        "BR-FIN-100",
+        "BR-FIN-103"
+      ],
+      "symbols_referenced": [
+        "Determines",
+        "Rebalancing",
+        "RebalanceDecision",
+        "CONSERVATIVE",
+        "MAX_EQUITY_CAP_CONSERVATIVE",
+        "MAX_EQUITY_CAP_BALANCED",
+        "FORCE_DELEVERAGE_EQUITY",
+        "HALF_UP",
+        "DRIFT_THRESHOLD_TRIGGER",
+        "HOLD_WITHIN_DRIFT_BAND",
+        "HIGH_VOLATILITY_VIX_CUTOFF",
+        "HALT_EQUITY_BUY_VIX_CIRCUIT_BREAKER",
+        "EXECUTE_STANDARD_REBALANCE",
         "BR-FIN-101",
         "BR-FIN-102",
         "BR-FIN-100",
@@ -91,24 +497,70 @@
       "token_count": 125
     },
     {
-      "id": "bdb930792057",
+      "id": "cdf139de485c",
       "file_path": "code/RoboAdvisorRebalanceService.java",
       "language": "java",
       "symbol": "RebalanceDecision",
+      "parent_symbol": "RebalanceDecision",
       "start_line": 61,
+      "end_line": 73,
+      "rule_ids": [],
+      "symbols_defined": [
+        "RebalanceDecision"
+      ],
+      "symbols_referenced": [],
+      "content": "public static final class RebalanceDecision {\n        private final boolean rebalanceRequired;\n        private final String ruleId;\n        private final String actionCode;\n        private final BigDecimal metricValue;\n\n        public RebalanceDecision(boolean rebalanceRequired, String ruleId, String actionCode, BigDecimal metricValue) {\n            this.rebalanceRequired = rebalanceRequired;\n            this.ruleId = ruleId;\n            this.actionCode = actionCode;\n            this.metricValue = metricValue;\n        }",
+      "token_count": 45
+    },
+    {
+      "id": "382db290ffd6",
+      "file_path": "code/RoboAdvisorRebalanceService.java",
+      "language": "java",
+      "symbol": "RebalanceDecision.getMetricValue",
+      "parent_symbol": "RebalanceDecision",
+      "start_line": 74,
       "end_line": 80,
       "rule_ids": [],
-      "content": "public static final class RebalanceDecision {\n        private final boolean rebalanceRequired;\n        private final String ruleId;\n        private final String actionCode;\n        private final BigDecimal metricValue;\n\n        public RebalanceDecision(boolean rebalanceRequired, String ruleId, String actionCode, BigDecimal metricValue) {\n            this.rebalanceRequired = rebalanceRequired;\n            this.ruleId = ruleId;\n            this.actionCode = actionCode;\n            this.metricValue = metricValue;\n        }\n\n        public boolean isRebalanceRequired() { return rebalanceRequired; }\n        public String getRuleId() { return ruleId; }\n        public String getActionCode() { return actionCode; }\n        public BigDecimal getMetricValue() { return metricValue; }\n    }\n}",
-      "token_count": 75
+      "symbols_defined": [
+        "RebalanceDecision.getMetricValue",
+        "RebalanceDecision"
+      ],
+      "symbols_referenced": [],
+      "content": "public boolean isRebalanceRequired() { return rebalanceRequired; }\n        public String getRuleId() { return ruleId; }\n        public String getActionCode() { return actionCode; }\n        public BigDecimal getMetricValue() { return metricValue; }\n    }\n}",
+      "token_count": 30
     },
     {
       "id": "2d29bb411c54",
       "file_path": "llm-wiki/ADR-001-Three-Lane-Dataflow-Pipeline.md",
       "language": "markdown",
       "symbol": "ADR-001: Re-Architecting Server Request Pipeline onto 3-Lane TPL Dataflow",
+      "parent_symbol": "ADR-001-Three-Lane-Dataflow-Pipeline",
       "start_line": 1,
       "end_line": 7,
       "rule_ids": [
+        "ADR-001",
+        "BR-SRV-301",
+        "BR-SRV-302",
+        "BR-SRV-303"
+      ],
+      "symbols_defined": [
+        "ADR-001: Re-Architecting Server Request Pipeline onto 3-Lane TPL Dataflow",
+        "ADR-001-Three-Lane-Dataflow-Pipeline",
+        "ADR-001",
+        "BR-SRV-301",
+        "BR-SRV-302",
+        "BR-SRV-303"
+      ],
+      "symbols_referenced": [
+        "Architecting",
+        "Server",
+        "Request",
+        "Pipeline",
+        "Lane",
+        "Dataflow",
+        "TACT",
+        "Concurrency",
+        "Routing",
         "ADR-001",
         "BR-SRV-301",
         "BR-SRV-302",
@@ -122,9 +574,45 @@
       "file_path": "llm-wiki/ADR-001-Three-Lane-Dataflow-Pipeline.md",
       "language": "markdown",
       "symbol": "Decision",
+      "parent_symbol": "ADR-001-Three-Lane-Dataflow-Pipeline",
       "start_line": 8,
       "end_line": 30,
       "rule_ids": [
+        "BR-SRV-301",
+        "BR-SRV-302",
+        "BR-SRV-303"
+      ],
+      "symbols_defined": [
+        "Decision",
+        "ADR-001-Three-Lane-Dataflow-Pipeline",
+        "BR-SRV-301",
+        "BR-SRV-302",
+        "BR-SRV-303"
+      ],
+      "symbols_referenced": [
+        "ClientResponseProcess",
+        "When",
+        "Lane",
+        "Dataflow",
+        "ActionBlock",
+        "RequestEnvelope",
+        "Pipeline",
+        "Control",
+        "Target",
+        "Session",
+        "KeepAlive",
+        "Concurrency",
+        "MaxDegreeOfParallelism",
+        "Rationale",
+        "Query",
+        "Read",
+        "Dapper",
+        "Server",
+        "Mutation",
+        "Device",
+        "MaxDOP",
+        "State",
+        "Parallelizing",
         "BR-SRV-301",
         "BR-SRV-302",
         "BR-SRV-303"
@@ -137,9 +625,21 @@
       "file_path": "llm-wiki/ADR-001-Three-Lane-Dataflow-Pipeline.md",
       "language": "markdown",
       "symbol": "Consequences",
+      "parent_symbol": "ADR-001-Three-Lane-Dataflow-Pipeline",
       "start_line": 31,
       "end_line": 35,
       "rule_ids": [],
+      "symbols_defined": [
+        "Consequences",
+        "ADR-001-Three-Lane-Dataflow-Pipeline"
+      ],
+      "symbols_referenced": [
+        "Throughput",
+        "Latency",
+        "Verification",
+        "Validated",
+        "RACTServerConcurrencyVerify"
+      ],
       "content": "## Consequences\n\n- **Throughput \u0026 Latency:** P99 control packet latency dropped by 84% under heavy query load; global lock contention was eliminated using `ConcurrentDictionary`.\n- **Verification:** Validated by `RACTServerConcurrencyVerify` harness across 10,000 synthetic concurrent packets with zero ordering violations.",
       "token_count": 39
     },
@@ -148,9 +648,36 @@
       "file_path": "llm-wiki/ADR-002-Headless-VT-Engine-Architecture.md",
       "language": "markdown",
       "symbol": "ADR-002: Decoupling Terminal Protocol State into a Headless VT100/ANSI Engine",
+      "parent_symbol": "ADR-002-Headless-VT-Engine-Architecture",
       "start_line": 1,
       "end_line": 7,
       "rule_ids": [
+        "ADR-002",
+        "BR-TERM-201",
+        "BR-TERM-202"
+      ],
+      "symbols_defined": [
+        "ADR-002: Decoupling Terminal Protocol State into a Headless VT100/ANSI Engine",
+        "ADR-002-Headless-VT-Engine-Architecture",
+        "ADR-002",
+        "BR-TERM-201",
+        "BR-TERM-202"
+      ],
+      "symbols_referenced": [
+        "Decoupling",
+        "Terminal",
+        "Protocol",
+        "State",
+        "Headless",
+        "VT100",
+        "ANSI",
+        "Engine",
+        "TACT",
+        "Client",
+        "Emulation",
+        "Device",
+        "Automation",
+        "TERM",
         "ADR-002",
         "BR-TERM-201",
         "BR-TERM-202"
@@ -163,9 +690,28 @@
       "file_path": "llm-wiki/ADR-002-Headless-VT-Engine-Architecture.md",
       "language": "markdown",
       "symbol": "Context",
+      "parent_symbol": "ADR-002-Headless-VT-Engine-Architecture",
       "start_line": 8,
       "end_line": 14,
       "rule_ids": [
+        "BR-TERM-201"
+      ],
+      "symbols_defined": [
+        "Context",
+        "ADR-002-Headless-VT-Engine-Architecture",
+        "BR-TERM-201"
+      ],
+      "symbols_referenced": [
+        "WinForms",
+        "Telnet",
+        "Automated",
+        "Control",
+        "Refresh",
+        "TERM",
+        "This",
+        "Full",
+        "Windows",
+        "Zero",
         "BR-TERM-201"
       ],
       "content": "## Context\n\nIn the legacy WinForms client, SSH/Telnet byte streams were fed directly into a commercial third-party UI terminal control. Automated batch scripts (such as 116-step router provisioning) relied on UI thread timers and synchronous `Control.Refresh()` calls inside sub-50ms polling loops (`BR-TERM-201`). This caused:\n1. Full-screen GDI+ repaints on every poll iteration, pegging a CPU core at 100%.\n2. Non-deterministic prompt detection failures whenever the Windows message pump was delayed by user window dragging or modal dialogs.\n3. Zero ability to run automated regression tests in headless CI environments.",
@@ -176,9 +722,35 @@
       "file_path": "llm-wiki/ADR-002-Headless-VT-Engine-Architecture.md",
       "language": "markdown",
       "symbol": "Decision",
+      "parent_symbol": "ADR-002-Headless-VT-Engine-Architecture",
       "start_line": 15,
       "end_line": 22,
       "rule_ids": [
+        "BR-TERM-202"
+      ],
+      "symbols_defined": [
+        "Decision",
+        "ADR-002-Headless-VT-Engine-Architecture",
+        "BR-TERM-202"
+      ],
+      "symbols_referenced": [
+        "Headless",
+        "VT100",
+        "ANSI",
+        "State",
+        "Machine",
+        "Engine",
+        "HeadlessVtEngine",
+        "TERM",
+        "Protocol",
+        "Ownership",
+        "Telnet",
+        "WinForms",
+        "Demotion",
+        "Refresh",
+        "Benchmark",
+        "Proof",
+        "RACTTerminalScriptVerify",
         "BR-TERM-202"
       ],
       "content": "## Decision\n\nWe designed and implemented a **Headless VT100/ANSI State Machine Engine (`HeadlessVtEngine`)** that owns all protocol parsing, scrollback buffer state, and prompt-matching logic (`BR-TERM-202`):\n\n- **Protocol Ownership:** The headless engine consumes raw SSH/Telnet byte streams on a background worker, processes ANSI escape sequences, and evaluates prompt-wait predicates deterministically without touching the WinForms UI thread.\n- **UI Demotion:** The visible WinForms control is demoted to a passive render surface that invalidates at a capped frame rate (30 FPS coalesced render) rather than synchronous `Refresh()` per packet.\n- **Benchmark Proof:** A 116-step equipment configuration script (58 command sends + 58 prompt waits) completed in **4,858 ms end-to-end** inside the `RACTTerminalScriptVerify` harness with zero UI thread dependency.",

@@ -1,0 +1,42 @@
+name: Legacy-Lens-RAG Verification Harness CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  verify-hybrid-graph-rag:
+    name: Go 3-Lane Ingestor & Python 12-Gate RAG Harness
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go 1.22
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run Go AST/GraphRAG Chunker Unit Tests
+        working-directory: ./go-engine
+        run: go test ./... -v
+
+      - name: Execute Go 3-Lane Ingestion Pipeline
+        working-directory: ./go-engine
+        run: go run ./cmd/legacy-lens -mode=ingest -corpus=../sample-corpus -out=../artifacts/chunks_index.json
+
+      - name: Execute Python 12-Gate Hybrid GraphRAG Verification Harness
+        working-directory: ./py-rag
+        run: python harnesses/verify_rag_metrics.py
+
+      - name: Test Go-to-Python CLI Query Bridge
+        working-directory: ./py-rag
+        run: python src/cli_query.py --index ../artifacts/chunks_index.json --query "운영 장비 설정 모드 진입 권한 조건 (BR-POL-002)"

@@ -1,36 +1,23 @@
 """
-Hybrid Retriever combining:
-1. Okapi BM25 Sparse Keyword Scoring (critical for exact Rule IDs, method names, and error codes)
-2. Dense Semantic Subword N-Gram / Term-Projection Vector Cosine Similarity
-3. Reciprocal Rank Fusion (RRF, k=60) + Rule-ID Exact Boost Reranking
+3-Way Hybrid GraphRAG Retriever combining:
+1. Okapi BM25 Sparse Lexical Scoring (with CamelCase & Cross-Lingual Korean->English expansion)
+2. Dense Vector Cosine Similarity (via Pluggable EmbeddingProvider)
+3. 1-Hop Code/ADR Dependency Graph Expansion (SymbolsDefined <-> SymbolsReferenced)
+4. Reciprocal Rank Fusion (RRF, k=60) + Domain Rule-ID Exact Boost
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Set
+
+from .providers import EmbeddingProvider, LocalDeterministicEmbedder, expand_and_tokenize
 
 
-TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9_.\-]+|[가-힣]+")
 RULE_ID_PATTERN = re.compile(r"\b(?:BR-[A-Z]+-\d+[A-Z]?|ADR-\d+)\b", re.IGNORECASE)
-
-
-def split_camel_and_tokenize(text: str) -> List[str]:
-    """Tokenizes source code and prose, splitting CamelCase identifiers into semantic subtokens."""
-    raw_tokens = TOKEN_PATTERN.findall(text)
-    expanded: List[str] = []
-    for tok in raw_tokens:
-        lower_tok = tok.lower()
-        expanded.append(lower_tok)
-        # Split CamelCase: e.g., CommandPolicyEngine -> command, policy, engine
-        camel_parts = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", tok).lower().split()
-        if len(camel_parts) > 1:
-            expanded.extend(camel_parts)
-    return expanded
 
 
 @dataclass
@@ -44,6 +31,9 @@ class ChunkRecord:
     rule_ids: List[str]
     content: str
     token_count: int
+    parent_symbol: str = ""
+    symbols_defined: List[str] = field(default_factory=list)
+    symbols_referenced: List[str] = field(default_factory=list)
 
     @property
     def citation_tag(self) -> str:
@@ -58,17 +48,22 @@ class RetrievalHit:
     dense_rank: int
     bm25_score: float
     dense_score: float
+    graph_boost: float = 0.0
+    linked_neighbors: List[str] = field(default_factory=list)
 
 
 class HybridCodeWikiRetriever:
     """
-    Enterprise Hybrid Retriever implementing BM25 + Dense Vector Projection + RRF Fusion.
-    Designed per Karpathy guidelines: zero bloated framework wrappers, transparent math, 100% deterministic.
+    Enterprise 3-Way Hybrid GraphRAG Retriever (BM25 + Dense Vector + 1-Hop Dependency Graph).
     """
 
-    def __init__(self, chunks: List[ChunkRecord], vector_dim: int = 256, rrf_k: int = 60) -> None:
+    def __init__(
+        self,
+        chunks: List[ChunkRecord],
+        embedder: Optional[EmbeddingProvider] = None,
+        rrf_k: int = 60,
+    ) -> None:
         self.chunks = chunks
-        self.vector_dim = vector_dim
         self.rrf_k = rrf_k
 
         self.doc_tokens: List[List[str]] = []
@@ -76,9 +71,19 @@ class HybridCodeWikiRetriever:
         self.doc_lengths: List[int] = []
         self.avg_dl: float = 1.0
 
-        self._build_bm25_index()
+        # Graph adjacency index: symbol/rule -> list of chunk indices defining or referencing it
+        self.symbol_to_defining_chunks: Dict[str, List[int]] = {}
+        self.symbol_to_referencing_chunks: Dict[str, List[int]] = {}
+
+        self._build_bm25_and_graph_index()
+
+        self.embedder: EmbeddingProvider = embedder or LocalDeterministicEmbedder(
+            doc_freqs=self.doc_freqs, total_docs=len(self.chunks)
+        )
         self.dense_vectors: List[List[float]] = [
-            self._compute_dense_embedding(c.content + " " + c.symbol + " " + " ".join(c.rule_ids))
+            self.embedder.embed_text(
+                f"{c.symbol} {' '.join(c.rule_ids)} {' '.join(c.symbols_referenced)} {c.content}"
+            )
             for c in self.chunks
         ]
 
@@ -91,9 +96,12 @@ class HybridCodeWikiRetriever:
                 file_path=item["file_path"],
                 language=item["language"],
                 symbol=item["symbol"],
+                parent_symbol=item.get("parent_symbol", ""),
                 start_line=item["start_line"],
                 end_line=item["end_line"],
                 rule_ids=item.get("rule_ids", []),
+                symbols_defined=item.get("symbols_defined", []),
+                symbols_referenced=item.get("symbols_referenced", []),
                 content=item["content"],
                 token_count=item["token_count"],
             )
@@ -101,44 +109,32 @@ class HybridCodeWikiRetriever:
         ]
         return cls(records)
 
-    def _build_bm25_index(self) -> None:
+    def _build_bm25_and_graph_index(self) -> None:
         total_len = 0
-        for c in self.chunks:
-            augmented = f"{c.file_path} {c.symbol} {' '.join(c.rule_ids)} {c.content}"
-            tokens = split_camel_and_tokenize(augmented)
+        for idx, c in enumerate(self.chunks):
+            augmented = (
+                f"{c.file_path} {c.symbol} {' '.join(c.rule_ids)} "
+                f"{' '.join(c.symbols_referenced)} {c.content}"
+            )
+            tokens = expand_and_tokenize(augmented)
             self.doc_tokens.append(tokens)
             self.doc_lengths.append(len(tokens))
             total_len += len(tokens)
             for unique_tok in set(tokens):
                 self.doc_freqs[unique_tok] = self.doc_freqs.get(unique_tok, 0) + 1
+
+            # Build Code/ADR GraphRAG edges
+            for sym in set(c.symbols_defined + c.rule_ids):
+                key = sym.upper()
+                self.symbol_to_defining_chunks.setdefault(key, []).append(idx)
+                for part in sym.split("."):
+                    self.symbol_to_defining_chunks.setdefault(part.upper(), []).append(idx)
+
+            for ref in set(c.symbols_referenced):
+                key = ref.upper()
+                self.symbol_to_referencing_chunks.setdefault(key, []).append(idx)
+
         self.avg_dl = total_len / max(len(self.chunks), 1)
-
-    def _compute_dense_embedding(self, text: str) -> List[float]:
-        """
-        Feature-hashed character 3/4-gram + semantic token random projection embedding (L2-normalized).
-        Provides deterministic semantic similarity resilient to morphological variations without external API keys.
-        """
-        vec = [0.0] * self.vector_dim
-        tokens = split_camel_and_tokenize(text)
-        features: List[Tuple[str, float]] = []
-        for tok in tokens:
-            idf_weight = self._idf(tok)
-            features.append((f"tok:{tok}", idf_weight))
-            if len(tok) >= 4:
-                for i in range(len(tok) - 2):
-                    features.append((f"ng3:{tok[i:i+3]}", 0.4 * idf_weight))
-
-        for feat, weight in features:
-            digest = hashlib.blake2b(feat.encode("utf-8"), digest_size=8).digest()
-            h_int = int.from_bytes(digest, "little")
-            idx = h_int % self.vector_dim
-            sign = 1.0 if ((h_int >> 32) & 1) == 0 else -1.0
-            vec[idx] += sign * weight
-
-        norm = math.sqrt(sum(v * v for v in vec))
-        if norm > 1e-9:
-            vec = [v / norm for v in vec]
-        return vec
 
     def _idf(self, term: str) -> float:
         n_docs = len(self.chunks)
@@ -167,9 +163,28 @@ class HybridCodeWikiRetriever:
     def _cosine_sim(v1: List[float], v2: List[float]) -> float:
         return sum(a * b for a, b in zip(v1, v2))
 
+    def get_one_hop_neighbors(self, chunk_idx: int) -> List[str]:
+        """Returns citation tags of 1-hop connected chunks via shared symbols or ADR/Rule references."""
+        chunk = self.chunks[chunk_idx]
+        neighbor_indices: Set[int] = set()
+
+        for ref in chunk.symbols_referenced + chunk.rule_ids:
+            key = ref.upper()
+            for target_idx in self.symbol_to_defining_chunks.get(key, []):
+                if target_idx != chunk_idx:
+                    neighbor_indices.add(target_idx)
+
+        for defined in chunk.symbols_defined + chunk.rule_ids:
+            key = defined.upper()
+            for ref_idx in self.symbol_to_referencing_chunks.get(key, []):
+                if ref_idx != chunk_idx:
+                    neighbor_indices.add(ref_idx)
+
+        return [self.chunks[i].citation_tag for i in sorted(neighbor_indices)]
+
     def search(self, query: str, top_k: int = 3) -> List[RetrievalHit]:
-        query_tokens = split_camel_and_tokenize(query)
-        query_vec = self._compute_dense_embedding(query)
+        query_tokens = expand_and_tokenize(query)
+        query_vec = self.embedder.embed_text(query)
         mentioned_rules = {r.upper() for r in RULE_ID_PATTERN.findall(query)}
 
         bm25_scores = [self._score_bm25(query_tokens, i) for i in range(len(self.chunks))]
@@ -181,25 +196,41 @@ class HybridCodeWikiRetriever:
         bm25_ranks = {doc_idx: rank + 1 for rank, doc_idx in enumerate(bm25_order)}
         dense_ranks = {doc_idx: rank + 1 for rank, doc_idx in enumerate(dense_order)}
 
+        # Identify seed chunks (top 2 from BM25/Dense) for 1-Hop GraphRAG boost
+        seed_indices = {bm25_order[0], dense_order[0]}
+        graph_connected_to_seed: Set[int] = set()
+        for s_idx in seed_indices:
+            s_chunk = self.chunks[s_idx]
+            for ref in s_chunk.symbols_referenced + s_chunk.rule_ids:
+                for target_idx in self.symbol_to_defining_chunks.get(ref.upper(), []):
+                    if target_idx != s_idx:
+                        graph_connected_to_seed.add(target_idx)
+
         hits: List[RetrievalHit] = []
         for idx, chunk in enumerate(self.chunks):
             r_bm25 = bm25_ranks[idx]
             r_dense = dense_ranks[idx]
             rrf = (1.0 / (self.rrf_k + r_bm25)) + (1.0 / (self.rrf_k + r_dense))
 
-            # Exact Business Rule ID / ADR ID match boost (Domain-aware reranking)
+            g_boost = 0.0
             chunk_rules = {r.upper() for r in chunk.rule_ids}
             if mentioned_rules and (mentioned_rules & chunk_rules):
-                rrf += 0.05
+                g_boost += 0.05
 
+            if idx in graph_connected_to_seed:
+                g_boost += 0.008
+
+            total_rrf = rrf + g_boost
             hits.append(
                 RetrievalHit(
                     chunk=chunk,
-                    rrf_score=round(rrf, 6),
+                    rrf_score=round(total_rrf, 6),
                     bm25_rank=r_bm25,
                     dense_rank=r_dense,
                     bm25_score=round(bm25_scores[idx], 4),
                     dense_score=round(dense_scores[idx], 4),
+                    graph_boost=round(g_boost, 4),
+                    linked_neighbors=self.get_one_hop_neighbors(idx),
                 )
             )
 

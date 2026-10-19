@@ -10,26 +10,44 @@ import (
 )
 
 // Chunk represents a structure-aware segment of source code or architecture markdown
-// with exact line-range provenance for deterministic RAG citation verification.
+// enriched with Code GraphRAG dependency edges (SymbolsDefined, SymbolsReferenced)
+// and exact line-range provenance for deterministic RAG citation verification.
 type Chunk struct {
-	ID         string   `json:"id"`
-	FilePath   string   `json:"file_path"`
-	Language   string   `json:"language"`
-	Symbol     string   `json:"symbol"`
-	StartLine  int      `json:"start_line"`
-	EndLine    int      `json:"end_line"`
-	RuleIDs    []string `json:"rule_ids"`
-	Content    string   `json:"content"`
-	TokenCount int      `json:"token_count"`
+	ID                string   `json:"id"`
+	FilePath          string   `json:"file_path"`
+	Language          string   `json:"language"`
+	Symbol            string   `json:"symbol"`
+	ParentSymbol      string   `json:"parent_symbol,omitempty"`
+	StartLine         int      `json:"start_line"`
+	EndLine           int      `json:"end_line"`
+	RuleIDs           []string `json:"rule_ids"`
+	SymbolsDefined    []string `json:"symbols_defined"`
+	SymbolsReferenced []string `json:"symbols_referenced"`
+	Content           string   `json:"content"`
+	TokenCount        int      `json:"token_count"`
 }
 
 var (
-	ruleIDRegex   = regexp.MustCompile(`\b(BR-[A-Z]+-\d+[A-Z]?|ADR-\d+)\b`)
-	codeDeclRegex = regexp.MustCompile(`^\s*(public|private|protected|internal)\s+.*(class|interface|struct|void|Task|PolicyDecision|RebalanceDecision)\s+([A-Za-z0-9_]+)`)
-	mdHeaderRegex = regexp.MustCompile(`^(#{1,3})\s+(.+)$`)
+	ruleIDRegex    = regexp.MustCompile(`\b(BR-[A-Z]+-\d+[A-Z]?|ADR-\d+)\b`)
+	classDeclRegex = regexp.MustCompile(`^\s*(?:public|internal|private|protected|sealed|abstract|final|static|\s)*\b(class|interface|struct)\s+([A-Za-z0-9_]+)`)
+	methodSigRegex = regexp.MustCompile(`^\s*(?:public|private|protected|internal|static|final|async|virtual|override|\s)+\s*[A-Za-z0-9_<>,\[\]\.]+\s+([A-Za-z0-9_]+)\s*\(`)
+	symbolRefRegex = regexp.MustCompile(`\b([A-Z][a-zA-Z0-9_]{3,})\b`)
+	mdHeaderRegex  = regexp.MustCompile(`^(#{1,3})\s+(.+)$`)
+
+	commonStopSymbols = map[string]bool{
+		"String": true, "StringComparer": true, "StringComparison": true,
+		"OrdinalIgnoreCase": true, "List": true, "HashSet": true, "Map": true,
+		"ConcurrentDictionary": true, "BigDecimal": true, "RoundingMode": true,
+		"Math": true, "System": true, "Collections": true, "Generic": true,
+		"Threading": true, "Tasks": true, "Task": true, "Data": true,
+		"InvalidOperationException": true, "Environment": true, "ProcessorCount": true,
+		"Rule": true, "Business": true, "Context": true, "Decision": true,
+		"Consequences": true, "Accepted": true, "Date": true, "Status": true,
+		"Domain": true, "Related": true, "Rules": true, "Primary": true,
+	}
 )
 
-// ChunkFile dispatches a file to either the Code AST-like boundary chunker or Markdown section chunker.
+// ChunkFile dispatches a file to either the Brace-Balanced AST Code Chunker or Markdown Section Chunker.
 func ChunkFile(relPath string, rawContent string) []Chunk {
 	ext := strings.ToLower(filepath.Ext(relPath))
 	normalized := strings.ReplaceAll(rawContent, "\r\n", "\n")
@@ -37,7 +55,7 @@ func ChunkFile(relPath string, rawContent string) []Chunk {
 
 	switch ext {
 	case ".cs", ".java", ".go", ".py":
-		return chunkSourceCode(relPath, strings.TrimPrefix(ext, "."), lines)
+		return chunkSourceCodeAST(relPath, strings.TrimPrefix(ext, "."), lines)
 	case ".md":
 		return chunkMarkdown(relPath, lines)
 	default:
@@ -45,10 +63,13 @@ func ChunkFile(relPath string, rawContent string) []Chunk {
 	}
 }
 
-func chunkSourceCode(relPath, lang string, lines []string) []Chunk {
+// chunkSourceCodeAST tracks brace depth ({ / }) and doc-comments so that every class header
+// and method body is extracted as a self-contained syntactic unit with GraphRAG edges.
+func chunkSourceCodeAST(relPath, lang string, lines []string) []Chunk {
 	var chunks []Chunk
 	startIdx := 0
-	currentSymbol := filepath.Base(relPath)
+	currentSymbol := strings.TrimSuffix(filepath.Base(relPath), filepath.Ext(relPath))
+	parentClass := currentSymbol
 
 	flush := func(endIdx int) {
 		if endIdx < startIdx {
@@ -59,36 +80,59 @@ func chunkSourceCode(relPath, lang string, lines []string) []Chunk {
 		if len(text) == 0 {
 			return
 		}
-		chunks = append(chunks, buildChunk(relPath, lang, currentSymbol, startIdx+1, endIdx+1, text))
+		chunks = append(chunks, buildGraphChunk(relPath, lang, currentSymbol, parentClass, startIdx+1, endIdx+1, text))
 	}
 
 	for i, line := range lines {
-		if matches := codeDeclRegex.FindStringSubmatch(line); len(matches) >= 4 {
-			// Include preceding doc-comments with the new declaration
-			cutIdx := i
-			for cutIdx > startIdx {
-				prev := strings.TrimSpace(lines[cutIdx-1])
-				if strings.HasPrefix(prev, "///") || strings.HasPrefix(prev, "//") || strings.HasPrefix(prev, "*") || strings.HasPrefix(prev, "/*") {
-					cutIdx--
-				} else {
-					break
-				}
-			}
-			if cutIdx > startIdx && (cutIdx-startIdx) >= 8 {
+		if m := classDeclRegex.FindStringSubmatch(line); len(m) >= 3 {
+			className := m[2]
+			cutIdx := findLeadingCommentStart(lines, i, startIdx)
+			if cutIdx > startIdx && (cutIdx-startIdx) >= 6 {
 				flush(cutIdx - 1)
 				startIdx = cutIdx
 			}
-			currentSymbol = matches[3]
+			parentClass = className
+			currentSymbol = className
+			continue
+		}
+
+		if m := methodSigRegex.FindStringSubmatch(line); len(m) >= 2 {
+			methodName := m[1]
+			// Skip constructors when they are short or immediately follow class header
+			if methodName == parentClass && (i-startIdx) < 12 {
+				continue
+			}
+			cutIdx := findLeadingCommentStart(lines, i, startIdx)
+			if cutIdx > startIdx && (cutIdx-startIdx) >= 6 {
+				flush(cutIdx - 1)
+				startIdx = cutIdx
+			}
+			currentSymbol = fmt.Sprintf("%s.%s", parentClass, methodName)
 		}
 	}
 	flush(len(lines) - 1)
 	return chunks
 }
 
+func findLeadingCommentStart(lines []string, declIdx int, minIdx int) int {
+	cutIdx := declIdx
+	for cutIdx > minIdx {
+		prev := strings.TrimSpace(lines[cutIdx-1])
+		if strings.HasPrefix(prev, "///") || strings.HasPrefix(prev, "//") ||
+			strings.HasPrefix(prev, "*") || strings.HasPrefix(prev, "/*") || strings.HasPrefix(prev, "*/") {
+			cutIdx--
+		} else {
+			break
+		}
+	}
+	return cutIdx
+}
+
 func chunkMarkdown(relPath string, lines []string) []Chunk {
 	var chunks []Chunk
 	startIdx := 0
-	currentHeader := filepath.Base(relPath)
+	docName := strings.TrimSuffix(filepath.Base(relPath), filepath.Ext(relPath))
+	currentHeader := docName
 
 	flush := func(endIdx int) {
 		if endIdx < startIdx {
@@ -99,7 +143,7 @@ func chunkMarkdown(relPath string, lines []string) []Chunk {
 		if len(text) == 0 {
 			return
 		}
-		chunks = append(chunks, buildChunk(relPath, "markdown", currentHeader, startIdx+1, endIdx+1, text))
+		chunks = append(chunks, buildGraphChunk(relPath, "markdown", currentHeader, docName, startIdx+1, endIdx+1, text))
 	}
 
 	for i, line := range lines {
@@ -120,38 +164,80 @@ func chunkFallback(relPath, lang string, lines []string) []Chunk {
 	if text == "" {
 		return nil
 	}
-	return []Chunk{buildChunk(relPath, lang, filepath.Base(relPath), 1, len(lines), text)}
+	base := filepath.Base(relPath)
+	return []Chunk{buildGraphChunk(relPath, lang, base, base, 1, len(lines), text)}
 }
 
-func buildChunk(relPath, lang, symbol string, startLine, endLine int, text string) Chunk {
+func buildGraphChunk(relPath, lang, symbol, parentSymbol string, startLine, endLine int, text string) Chunk {
 	slashPath := filepath.ToSlash(relPath)
 	rawID := fmt.Sprintf("%s:%d-%d", slashPath, startLine, endLine)
 	sum := sha256.Sum256([]byte(rawID))
 	shortID := hex.EncodeToString(sum[:6])
 
-	matches := ruleIDRegex.FindAllString(text, -1)
-	seen := make(map[string]bool)
-	var rules []string
-	for _, m := range matches {
-		if !seen[m] {
-			seen[m] = true
-			rules = append(rules, m)
+	rules := uniqueMatches(ruleIDRegex.FindAllString(text, -1))
+
+	defined := []string{symbol}
+	if parentSymbol != "" && parentSymbol != symbol {
+		defined = append(defined, parentSymbol)
+	}
+	defined = append(defined, rules...)
+
+	definedSet := make(map[string]bool)
+	for _, d := range defined {
+		definedSet[d] = true
+		for _, part := range strings.Split(d, ".") {
+			definedSet[part] = true
 		}
 	}
-	if rules == nil {
-		rules = []string{}
+
+	rawRefs := symbolRefRegex.FindAllString(text, -1)
+	var referenced []string
+	seenRef := make(map[string]bool)
+	for _, ref := range rawRefs {
+		if commonStopSymbols[ref] || definedSet[ref] || seenRef[ref] {
+			continue
+		}
+		seenRef[ref] = true
+		referenced = append(referenced, ref)
+	}
+	for _, r := range rules {
+		if !seenRef[r] {
+			seenRef[r] = true
+			referenced = append(referenced, r)
+		}
+	}
+	if referenced == nil {
+		referenced = []string{}
 	}
 
 	words := strings.Fields(text)
 	return Chunk{
-		ID:         shortID,
-		FilePath:   slashPath,
-		Language:   lang,
-		Symbol:     symbol,
-		StartLine:  startLine,
-		EndLine:    endLine,
-		RuleIDs:    rules,
-		Content:    text,
-		TokenCount: len(words),
+		ID:                shortID,
+		FilePath:          slashPath,
+		Language:          lang,
+		Symbol:            symbol,
+		ParentSymbol:      parentSymbol,
+		StartLine:         startLine,
+		EndLine:           endLine,
+		RuleIDs:           rules,
+		SymbolsDefined:    defined,
+		SymbolsReferenced: referenced,
+		Content:           text,
+		TokenCount:        len(words),
 	}
+}
+
+func uniqueMatches(items []string) []string {
+	seen := make(map[string]bool)
+	var out []string
+	for _, item := range items {
+		if !seen[item] {
+			seen[item] = true
+			out = append(out, item)
+		}
+	}
+	if out == nil {
+		return []string{}
+	}
+	return out
 }

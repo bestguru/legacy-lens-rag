@@ -1,117 +1,124 @@
-# legacy-lens-rag
+# legacy-lens-rag (v2.0)
 
-**Enterprise Hybrid RAG & MCP Engine for Legacy Codebase Reverse Engineering and `llm-wiki` Governance (Go + Python)**
+**Enterprise 3-Way Hybrid GraphRAG & MCP Engine for Legacy Codebase Reverse Engineering and `llm-wiki` Governance (Go + Python)**
 
+[![CI Verification Harness](https://github.com/bestguru/legacy-lens-rag/actions/workflows/ci.yml/badge.svg)](https://github.com/bestguru/legacy-lens-rag/actions)
 [![Go 1.22+](https://img.shields.io/badge/Go-1.22%2B-00ADD8?logo=go)](./go-engine)
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python)](./py-rag)
-[![MCP Compatible](https://img.shields.io/badge/MCP-JSON--RPC%202.0-8A2BE2)](./go-engine/internal/mcp)
-[![Verification Harness](https://img.shields.io/badge/Verification%20Harness-100%25%20PASS-success)](./py-rag/harnesses/verify_rag_metrics.py)
+[![MCP 2024-11-05](https://img.shields.io/badge/MCP-JSON--RPC%202.0-8A2BE2)](./go-engine/internal/mcp)
+[![12-Gate Harness](https://img.shields.io/badge/12--Gate%20Harness-100%25%20PASS-success)](./py-rag/harnesses/verify_rag_metrics.py)
 
 > **"Don't feed 100,000 lines of undocumented legacy code into an LLM with naive fixed-size text splitting."**
-> `legacy-lens-rag` is a production-pattern Hybrid RAG & Model Context Protocol (MCP) reference architecture designed to extract **Ubiquitous Language domain models**, **implicit Business Rules (`BR-*`)**, and **Architecture Decision Records (`ADR-*`)** from large enterprise codebases (C#, Java, SQL) and structured engineering wikis (`llm-wiki`) — with **zero hallucinated citations**.
+> `legacy-lens-rag` v2.0 is a production-pattern **3-Way Hybrid GraphRAG & Model Context Protocol (MCP)** engine designed to extract **Ubiquitous Language domain models**, **implicit Business Rules (`BR-*`)**, and **Architecture Decision Records (`ADR-*`)** from large enterprise codebases (C#, Java, SQL) and structured engineering wikis (`llm-wiki`) — with **zero hallucinated citations** and full **Korean ↔ English cross-lingual retrieval**.
 
 ---
 
-## 1. Why This Architecture Exists (Problem Statement)
+## 1. Why Tutorial-Grade RAG Fails on Enterprise Legacy Codebases
 
-In enterprise legacy modernization (e.g., 10+ year-old telecom OSS/NMS or banking core systems), naive tutorial-style RAG fails for three structural reasons:
-1. **Naive Chunking Destroys Code Boundaries:** Fixed character/token splitters sever method signatures from doc-comments and split business rule predicates across chunks, destroying line-number provenance.
-2. **Dense-Only Vector Search Misses Exact Identifiers:** In legacy codebases, operators and AI agents search for exact rule codes (`BR-POL-002`), method names (`EvaluateCommand`), or threshold constants (`0.035` / `MaxDOP=1`), where pure dense embeddings underperform lexical matching.
-3. **Unverified Citations Cause Dangerous Refactoring:** If an LLM hallucinates a business rule or fabricates a source line range, downstream modernization plans become unsafe.
+In real-world enterprise modernization (10+ year-old telecom OSS/NMS or banking core systems), naive RAG pipelines fail for four structural reasons (documented in [ADR-0001](./docs/adr/ADR-0001-hybrid-go-python-graph-rag.md)):
+
+1. **Naive Chunking Corrupts AST Boundaries & Line Provenance:** Fixed token splitters sever method signatures and XML/Javadoc comments from business rule predicates (`if` branches), destroying `[File:Lstart-Lend]` provenance.
+2. **Dense-Only Embeddings Miss Exact Identifiers:** Operators and coding agents query exact rule IDs (`BR-POL-002`), method names (`EvaluateCommand`), or numeric thresholds (`0.035`, `MaxDOP = 1`), where lexical matching (`Okapi BM25`) is mandatory.
+3. **Cross-Lingual Query Gap (Korean Question → English Source Code):** Korean enterprise engineers query in Korean (*"운영 장비 설정 모드 진입 시 필요한 권한 레벨과 우회서버 조건은?"*) while the underlying source code and identifiers are in English (`configure terminal`, `OperatorRoleLevel >= 3`, `Mode3_KAM_SSH`).
+4. **Isolated Chunks Miss Multi-Hop Dependencies (Code ↔ ADR Graph):** A transport class (`LegacyTelnetSessionManager`) invokes a policy engine (`CommandPolicyEngine`) and is governed by an architectural decision record (`ADR-001`).
 
 ---
 
-## 2. System Architecture (Go + Python Hybrid Pipeline)
+## 2. v2.0 System Architecture (Go + Python 3-Way Hybrid GraphRAG)
 
 ```mermaid
 flowchart LR
-    subgraph Go_Engine ["Go (go-engine) — 3-Lane Ingestion & MCP Server"]
+    subgraph Go_Engine ["Go (go-engine) — 3-Lane AST/Graph Ingestor & MCP Server"]
         L1["Lane 1: Discovery\n(File Walker)"]
-        L2["Lane 2: Parallel Compute\n(2x CPU Structure-Aware Chunker)"]
+        L2["Lane 2: Parallel Compute\n(2x CPU AST/Graph Chunker)"]
         L3["Lane 3: Serialized Sink\n(MaxDOP=1 Deterministic Index)"]
-        MCP["MCP JSON-RPC 2.0 Server\n(Claude Code / Agent Tool)"]
+        MCP["MCP JSON-RPC 2.0 Server\n(lookup_business_rule +\nhybrid_rag_query Bridge)"]
         L1 --> L2 --> L3
     end
 
-    subgraph Index_Artifact ["Deterministic Artifact"]
-        JSON[("chunks_index.json\nExact [File:Lstart-Lend]\n+ Extracted Rule IDs")]
+    subgraph Index_Artifact ["Deterministic Graph Index"]
+        JSON[("chunks_index.json\n• [File:Lstart-Lend]\n• RuleIDs (BR-*, ADR-*)\n• SymbolsDefined\n• SymbolsReferenced")]
     end
 
-    subgraph Py_Engine ["Python (py-rag) — Hybrid RRF Retrieval & Self-RAG Verifier"]
-        BM25["Okapi BM25\n(CamelCase-Split Lexical)"]
-        Dense["Dense Subword/Token\nProjection Cosine"]
-        RRF["Reciprocal Rank Fusion\n(RRF k=60 + Rule Boost)"]
+    subgraph Py_Engine ["Python (py-rag) — 3-Way Hybrid GraphRAG & Self-RAG Verifier"]
+        Lex["1. Okapi BM25\n(CamelCase + KO↔EN Lexicon)"]
+        Vec["2. Dense Vector Cosine\n(Pluggable Local / OpenAI / Ollama)"]
+        Graph["3. 1-Hop Code↔ADR Graph\n(SymbolsDefined ↔ Referenced)"]
+        RRF["Reciprocal Rank Fusion\n(RRF k=60 + Graph Boost)"]
         Guard["Self-RAG Citation Verifier\n(Hallucination Guardrail)"]
-        Harness["Verification Harness\n(Recall@K, MRR, Negative Gates)"]
+        Harness["12-Gate Verification Harness\n(CI Regression Gate)"]
     end
 
     L3 --> JSON
     JSON --> MCP
-    JSON --> BM25 & Dense
-    BM25 & Dense --> RRF --> Guard
-    Harness -.->|"CI Gate"| Guard
+    MCP <-->|"JSON Bridge\n(cli_query.py)"| RRF
+    JSON --> Lex & Vec & Graph
+    Lex & Vec & Graph --> RRF --> Guard
+    Harness -.->|"GitHub Actions CI"| Guard
 ```
 
-### Role Division: Why Go + Python?
-- **Go (`go-engine/`):**
-  - Implements a **3-Lane Concurrency Pipeline** (inspired by TPL Dataflow Control / Query / Mutation lane isolation): parallel file discovery, `2 × NumCPU` worker pool for **Structure-Aware Chunking** (preserving class/method declarations, doc-comments, and Markdown headers with exact `start_line`–`end_line`), and a single serialized aggregator (`MaxDOP=1`) for deterministic index output.
-  - Exposes a zero-dependency **Model Context Protocol (MCP) JSON-RPC 2.0 stdio server** (`lookup_business_rule`) so coding agents (`Claude Code`, `Codex`, `Gemini`) can query business rules directly.
-- **Python (`py-rag/`):**
-  - Implements **Hybrid Retrieval** combining **Okapi BM25** (with CamelCase identifier sub-tokenization) and **Dense Vector Cosine Similarity**, fused via **Reciprocal Rank Fusion (RRF, $k=60$)** and domain Rule-ID boosting.
-  - Enforces a **Self-RAG Hallucination Guardrail (`SelfRagVerifier`)** that rejects any synthesized response lacking valid `[file_path:Lstart-Lend]` provenance or referencing ungrounded Rule IDs.
+### Key Architectural Highlights (v2.0)
+- **[Go] 3-Lane Concurrency Pipeline & AST/Graph Edge Extractor (`go-engine/`):**
+  - Mirrors the TPL Dataflow 3-lane architecture: parallel file discovery, `2 × NumCPU` worker pool for AST boundary chunking, and a `MaxDOP=1` serialized sink for deterministic output.
+  - Extracts `SymbolsDefined` and `SymbolsReferenced` per chunk to build a **1-Hop Code & ADR Dependency Graph**.
+  - Serves an **MCP JSON-RPC 2.0 stdio server** with two tools: `lookup_business_rule` (fast Go lexical/symbol lookup) and `hybrid_rag_query` (live runtime bridge to the Python 3-Way Hybrid GraphRAG engine).
+- **[Python] 3-Way Hybrid GraphRAG, Pluggable Embeddings & Cross-Lingual Lexicon (`py-rag/`):**
+  - Combines **Okapi BM25** (with CamelCase sub-tokenization and Korean↔English enterprise domain expansion), **Dense Vector Similarity** (via `EmbeddingProvider` protocol supporting zero-key `LocalDeterministicEmbedder` and production `OpenAICompatibleEmbedder`), and **1-Hop GraphRAG Neighbor Boosting** fused via **RRF ($k=60$)**.
+  - Enforces a deterministic **Self-RAG Hallucination Guardrail (`SelfRagVerifier`)** that blocks any answer missing valid `[file_path:Lstart-Lend]` citations or referencing ungrounded Rule IDs.
 
 ---
 
-## 3. Verification Harness Output (Evidence Before Assertions)
+## 3. 12-Gate Verification Harness Output (Evidence Before Assertions)
 
-Following a strict **Verification-Driven AI Engineering** discipline, every retrieval change is gated by `py-rag/harnesses/verify_rag_metrics.py`:
+Every commit is verified automatically via GitHub Actions (`.github/workflows/ci.yml`) running `py-rag/harnesses/verify_rag_metrics.py` across **9 Golden Queries (English, Distractor-Disambiguation, and Korean Cross-Lingual)** and **3 Adversarial / GraphRAG Gates**:
 
 ```text
-[Go 3-Lane Ingestor] Indexed 4 files into 13 structure-aware chunks in 10 ms -> artifacts/chunks_index.json
-==============================================================================
- LEGACY-LENS-RAG : DETERMINISTIC VERIFICATION HARNESS
-==============================================================================
-[Loaded Index] 13 structure-aware chunks from artifacts/chunks_index.json
-  [PASS] Q1 | Rank=1 | RRF=0.0828 (BM25#1, Dense#1) -> [code/CommandPolicyEngine.cs:L30-L90]
-  [PASS] Q2 | Rank=1 | RRF=0.0825 (BM25#1, Dense#2) -> [code/CommandPolicyEngine.cs:L1-L29]
-  [PASS] Q3 | Rank=1 | RRF=0.0328 (BM25#1, Dense#1) -> [code/RoboAdvisorRebalanceService.java:L1-L17]
-  [PASS] Q4 | Rank=1 | RRF=0.0820 (BM25#2, Dense#3) -> [llm-wiki/ADR-001-Three-Lane-Dataflow-Pipeline.md:L1-L7]
-  [PASS] Q5 | Rank=1 | RRF=0.0823 (BM25#3, Dense#1) -> [llm-wiki/ADR-002-Headless-VT-Engine-Architecture.md:L1-L7]
-------------------------------------------------------------------------------
-  [GUARDRAIL TEST 1] Fake File Citation Blocked : True (HALLUCINATED_CITATION: ['[code/NonExistentFile.cs:L1-L50]'] not present in retrieved context.)
-  [GUARDRAIL TEST 2] Fake Rule ID Blocked       : True (UNGROUNDED_RULE_ID: 'BR-FAKE-999' does not exist in retrieved chunks.)
-------------------------------------------------------------------------------
-  METRICS SUMMARY:
-    - Recall@1 (Top-1 Exact Hit)    : 100.0% (5/5)
-    - Recall@3                      : 100.0% (5/5)
+[Go 3-Lane Ingestor v2.0] Indexed 6 files into 24 AST/Graph-aware chunks in 9 ms -> artifacts/chunks_index.json
+========================================================================================
+ LEGACY-LENS-RAG v2.0 : 3-WAY HYBRID GRAPHRAG & SELF-RAG VERIFICATION HARNESS
+========================================================================================
+[Loaded Index] 24 AST/Graph-aware chunks from artifacts/chunks_index.json
+  [PASS] Q1 [EN-Policy]       | Rank=1 | RRF=0.0828 (BM25#1, Dense#1, Graph+0.050) -> [code/CommandPolicyEngine.cs:L30-L90]
+  [PASS] Q2 [EN-Blocklist]    | Rank=1 | RRF=0.0905 (BM25#1, Dense#2, Graph+0.058) -> [code/CommandPolicyEngine.cs:L7-L29]
+  [PASS] Q3 [EN-Finance]      | Rank=1 | RRF=0.0405 (BM25#1, Dense#2, Graph+0.008) -> [code/RoboAdvisorRebalanceService.java:L7-L17]
+  [PASS] Q4 [EN-ADR001]       | Rank=1 | RRF=0.0895 (BM25#3, Dense#4, Graph+0.058) -> [llm-wiki/ADR-001-Three-Lane-Dataflow-Pipeline.md:L1-L7]
+  [PASS] Q5 [EN-ADR002]       | Rank=1 | RRF=0.0903 (BM25#3, Dense#1, Graph+0.058) -> [llm-wiki/ADR-002-Headless-VT-Engine-Architecture.md:L1-L7]
+  [PASS] Q6 [EN-Bastion]      | Rank=1 | RRF=0.0903 (BM25#2, Dense#2, Graph+0.058) -> [code/LegacyTelnetSessionManager.cs:L8-L18]
+  [PASS] Q7 [EN-DapperDB]     | Rank=1 | RRF=0.0903 (BM25#2, Dense#2, Graph+0.058) -> [code/AuditLogBatchWriter.cs:L7-L17]
+  [PASS] Q8 [KO-CrossLingual] | Rank=1 | RRF=0.0905 (BM25#1, Dense#2, Graph+0.058) -> [code/CommandPolicyEngine.cs:L30-L90]
+  [PASS] Q9 [KO-CrossLingual] | Rank=1 | RRF=0.0900 (BM25#2, Dense#3, Graph+0.058) -> [code/RoboAdvisorRebalanceService.java:L7-L17]
+----------------------------------------------------------------------------------------
+  [GATE 10: GUARDRAIL] Fake File Citation Blocked : True (HALLUCINATED_CITATION: ['[code/NonExistentFile.cs:L1-L50]'] not present in retrieved context.)
+  [GATE 11: GUARDRAIL] Fake Rule ID Blocked       : True (UNGROUNDED_RULE_ID: 'BR-FAKE-999' does not exist in retrieved chunks.)
+  [GATE 12: GRAPHRAG ] 1-Hop Code<->ADR Neighbors : True (Linked: ['[code/AuditLogBatchWriter.cs:L7-L17]', '[code/CommandPolicyEngine.cs:L1-L6]', '[code/CommandPolicyEngine.cs:L7-L29]'])
+----------------------------------------------------------------------------------------
+  METRICS SUMMARY (12 VERIFICATION GATES):
+    - Recall@1 (Top-1 Exact Hit)    : 100.0% (9/9)
+    - Recall@3                      : 100.0% (9/9)
     - Mean Reciprocal Rank (MRR)    : 1.0000
-    - Citation Faithfulness Rate    : 100.0% (5/5)
+    - Citation Faithfulness Rate    : 100.0% (9/9)
     - Hallucination Guardrail Block : 100.0% (2/2 Blocked)
-==============================================================================
-  RESULT: ALL RAG VERIFICATION HARNESS GATES PASSED.
+    - 1-Hop GraphRAG Edge Link      : PASS
+========================================================================================
+  RESULT: ALL 12/12 RAG VERIFICATION HARNESS GATES PASSED.
 ```
 
 ---
 
-## 4. Quick Start (Zero External API Keys Required)
+## 4. Quick Start
 
-### Step 1: Run Go Unit Tests & 3-Lane Ingestion Pipeline
 ```bash
+# 1. Run Go AST/GraphRAG unit tests & 3-Lane ingestion pipeline
 cd go-engine
 go test ./... -v
 go run ./cmd/legacy-lens -mode=ingest -corpus=../sample-corpus -out=../artifacts/chunks_index.json
-```
 
-### Step 2: Run Python Hybrid RAG Verification Harness
-```bash
+# 2. Run 12-Gate Python Hybrid GraphRAG Verification Harness
 cd ../py-rag
 python harnesses/verify_rag_metrics.py
-```
 
-### Step 3: Run Go MCP Server for Claude Code / Agent Integration
-```bash
-cd ../go-engine
-go run ./cmd/legacy-lens -mode=mcp -out=../artifacts/chunks_index.json
+# 3. Execute a live Korean Cross-Lingual Query with 1-Hop Graph Neighbors
+python src/cli_query.py --index ../artifacts/chunks_index.json --query "운영 장비 설정 모드 진입 시 필요한 권한 레벨과 Bastion 조건은? (BR-POL-002)"
 ```
 
 ---
@@ -120,29 +127,38 @@ go run ./cmd/legacy-lens -mode=mcp -out=../artifacts/chunks_index.json
 
 ```text
 legacy-lens-rag/
-├── README.md                                  # Architecture, verification benchmarks, and usage guide
+├── .github/workflows/ci.yml                   # Automated CI running Go tests + 12-Gate RAG Harness
+├── Makefile                                   # Unified build, ingest, verify, and query targets
+├── README.md                                  # Architecture, benchmarks, and usage guide
+├── docs/adr/
+│   └── ADR-0001-hybrid-go-python-graph-rag.md # Architectural rationale for Go+Python GraphRAG
 ├── sample-corpus/                             # Representative enterprise legacy code & llm-wiki ADRs
-│   ├── code/CommandPolicyEngine.cs            # C# Telecom device command whitelist engine (BR-POL-*)
-│   ├── code/RoboAdvisorRebalanceService.java  # Java Financial portfolio drift & VIX circuit breaker (BR-FIN-*)
-│   └── llm-wiki/                              # Structured LLM-maintained architecture decision records
+│   ├── code/
+│   │   ├── CommandPolicyEngine.cs             # C# Telecom device command whitelist engine (BR-POL-*)
+│   │   ├── LegacyTelnetSessionManager.cs      # C# Dual-Bastion SSH routing & distractor rules (BR-NET-*)
+│   │   ├── AuditLogBatchWriter.cs             # C# Dapper connection factory & batch policy (BR-DB-*)
+│   │   └── RoboAdvisorRebalanceService.java   # Java Financial drift & VIX circuit breaker (BR-FIN-*)
+│   └── llm-wiki/
 │       ├── ADR-001-Three-Lane-Dataflow-Pipeline.md
 │       └── ADR-002-Headless-VT-Engine-Architecture.md
-├── go-engine/                                 # [Go 1.22+] Concurrent Ingestor, AST/MD Chunker & MCP Server
+├── go-engine/                                 # [Go 1.22+] 3-Lane Ingestor, AST/Graph Chunker & MCP Server
 │   ├── go.mod
 │   ├── cmd/legacy-lens/main.go
 │   └── internal/
-│       ├── chunker/                           # Structure-aware code & markdown chunker + unit tests
+│       ├── chunker/                           # AST boundary & GraphRAG edge extractor + unit tests
 │       ├── ingest/                            # 3-Lane goroutine worker pool pipeline
-│       └── mcp/                               # Model Context Protocol JSON-RPC 2.0 server
-├── py-rag/                                    # [Python 3.12+] Hybrid RRF Retriever & Self-RAG Verifier
+│       └── mcp/                               # MCP JSON-RPC 2.0 server with Python RAG bridge
+├── py-rag/                                    # [Python 3.12+] 3-Way Hybrid GraphRAG & Self-RAG Verifier
 │   ├── src/
-│   │   ├── retriever.py                       # Okapi BM25 + Dense Vector Projection + RRF Fusion
-│   │   └── verifier.py                        # Citation [File:Line] provenance & hallucination guardrail
+│   │   ├── providers.py                       # Pluggable Embedders (Local/OpenAI) & KO<->EN Lexicon
+│   │   ├── retriever.py                       # BM25 + Dense + 1-Hop GraphRAG + RRF Fusion
+│   │   ├── verifier.py                        # Citation [File:Line] provenance & hallucination guardrail
+│   │   └── cli_query.py                       # JSON CLI bridge invoked by Go MCP server
 │   └── harnesses/
-│       └── verify_rag_metrics.py              # Deterministic Recall@K, MRR & negative guardrail harness
+│       └── verify_rag_metrics.py              # 12-Gate deterministic benchmark & negative test harness
 └── artifacts/
-    ├── chunks_index.json                      # Generated deterministic chunk index
-    └── rag_verification_report.json           # Generated harness verification metrics
+    ├── chunks_index.json                      # Generated deterministic AST/Graph chunk index (24 chunks)
+    └── rag_verification_report.json           # Generated 12-gate verification metrics report
 ```
 
 ---
