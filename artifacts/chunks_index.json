@@ -1,12 +1,12 @@
 {
-  "version": "3.0.0",
-  "generated_at": "2026-10-19T16:43:50Z",
+  "version": "3.3.0",
+  "generated_at": "2026-10-19T18:58:50Z",
   "total_files": 6,
   "reused_cached_files": 0,
   "reparsed_delta_files": 6,
   "skipped_large_files": 0,
   "total_chunks": 24,
-  "elapsed_ms": 16,
+  "elapsed_ms": 13,
   "file_hashes": {
     "code/AuditLogBatchWriter.cs": "6f6b4decd9755a5c3a6601677dab744a935f5c1b96d4f7d217a58fcd6f8b5157",
     "code/CommandPolicyEngine.cs": "11519c5383cb91f085a5bd6a128cccb120fc2c2a002997c573103de1e3a546d1",

@@ -182,7 +182,7 @@ func (s *Server) RegisterHAEndpoints(mux *http.ServeMux) {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"status":"healthy","version":"3.1.0","concurrency_model":"lock_free_rcu_atomic_pointer"}`))
+		_, _ = w.Write([]byte(`{"status":"healthy","version":"3.3.0","concurrency_model":"lock_free_rcu_atomic_pointer"}`))
 	})
 
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
@@ -210,7 +210,7 @@ func (s *Server) RegisterHAEndpoints(mux *http.ServeMux) {
 		w.Header().Set("Content-Type", "application/json")
 		if err := s.HotReloadIndex(); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
-			fmt.Fprintf(w, `{"reloaded":false,"error":"%v"}`, err)
+			_ = json.NewEncoder(w).Encode(map[string]any{"reloaded": false, "error": err.Error()})
 			return
 		}
 		w.WriteHeader(http.StatusOK)
@@ -248,7 +248,7 @@ func (s *Server) HandleRequest(req JSONRPCRequest) JSONRPCResponse {
 				"protocolVersion": "2024-11-05",
 				"serverInfo": map[string]string{
 					"name":    "legacy-lens-rag-mcp-ha",
-					"version": "3.1.0",
+					"version": "3.3.0",
 				},
 				"capabilities": map[string]interface{}{
 					"tools": map[string]bool{"listChanged": true},

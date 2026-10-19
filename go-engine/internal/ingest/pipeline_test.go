@@ -17,6 +17,9 @@ func TestIncrementalDeltaAndAtomicSwap(t *testing.T) {
 
 	fileA := filepath.Join(corpusDir, "ServiceA.cs")
 	fileB := filepath.Join(corpusDir, "ServiceB.cs")
+	ontologyDir := filepath.Join(corpusDir, "ontology")
+	_ = os.MkdirAll(ontologyDir, 0755)
+	_ = os.WriteFile(filepath.Join(ontologyDir, "domain_ontology.json"), []byte(`{"version":"3.3.0","rules":["BR-TEST-001"]}`), 0644)
 	_ = os.WriteFile(fileA, []byte("public class ServiceA { // BR-TEST-001\n public void Run() {}\n}"), 0644)
 	_ = os.WriteFile(fileB, []byte("public class ServiceB { // BR-TEST-002\n public void Exec() {}\n}"), 0644)
 

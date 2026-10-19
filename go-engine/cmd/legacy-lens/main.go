@@ -24,7 +24,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Ingestion error: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("[Go 3-Lane Ingestor v2.0] Indexed %d files into %d AST/Graph-aware chunks in %d ms -> %s\n",
+		fmt.Printf("[Go 3-Lane Ingestor v3.3] Indexed %d files into %d AST/Graph-aware chunks in %d ms -> %s\n",
 			manifest.TotalFiles, manifest.TotalChunks, manifest.ElapsedMillis, *outputFile)
 
 	case "mcp":

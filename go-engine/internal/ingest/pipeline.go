@@ -10,7 +10,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kyungtae-kang/legacy-lens-rag/go-engine/internal/chunker"
@@ -19,7 +21,16 @@ import (
 // MaxIngestFileSizeBytes guards the worker pool against memory spikes from huge binary/log dumps (10 MB cap).
 const MaxIngestFileSizeBytes = 10 * 1024 * 1024
 
-// IndexManifest represents the deterministic output of the 3-Lane Go Ingestion Pipeline (v3.0 HA/Scale).
+var supportedIngestExts = map[string]bool{
+	".cs":   true,
+	".java": true,
+	".go":   true,
+	".py":   true,
+	".sql":  true,
+	".md":   true,
+}
+
+// IndexManifest represents the deterministic output of the 3-Lane Go Ingestion Pipeline (v3.3 Enterprise AI/HA/Scale).
 type IndexManifest struct {
 	Version            string            `json:"version"`
 	GeneratedAt        string            `json:"generated_at"`
@@ -47,8 +58,8 @@ type fileResult struct {
 	chunks     []chunker.Chunk
 }
 
-// RunThreeLanePipeline v3.0 implements:
-// 1. Bounded Backpressure & File Size Guard (skips files > MaxIngestFileSizeBytes)
+// RunThreeLanePipeline v3.3 implements:
+// 1. Bounded Backpressure, Extension Whitelist & File Size Guard (skips metadata JSON & files > MaxIngestFileSizeBytes)
 // 2. SHA-256 Merkle Delta Detection (reuses unchanged chunks from previous manifest in O(1))
 // 3. Atomic Blue-Green Index Swap (writes to .tmp, computes checksum, and atomically renames to target)
 func RunThreeLanePipeline(corpusRoot string, outputIndexPath string) (*IndexManifest, error) {
@@ -117,12 +128,22 @@ func RunThreeLanePipeline(corpusRoot string, outputIndexPath string) (*IndexMani
 		}()
 	}
 
-	// Lane 1: Discovery with MaxFileSize Guard
-	skippedLarge := 0
+	// Lane 1: Discovery with Extension Whitelist, Ontology Metadata Skip & MaxFileSize Guard
+	var skippedLarge atomic.Int64
 	go func() {
 		defer close(jobChan)
 		_ = filepath.WalkDir(corpusRoot, func(path string, d fs.DirEntry, err error) error {
-			if err != nil || d.IsDir() {
+			if err != nil {
+				return nil
+			}
+			if d.IsDir() {
+				if strings.EqualFold(d.Name(), "ontology") {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			ext := strings.ToLower(filepath.Ext(d.Name()))
+			if !supportedIngestExts[ext] {
 				return nil
 			}
 			info, err := d.Info()
@@ -130,7 +151,7 @@ func RunThreeLanePipeline(corpusRoot string, outputIndexPath string) (*IndexMani
 				return nil
 			}
 			if info.Size() > MaxIngestFileSizeBytes {
-				skippedLarge++
+				skippedLarge.Add(1)
 				return nil
 			}
 			rel, err := filepath.Rel(corpusRoot, path)
@@ -148,7 +169,7 @@ func RunThreeLanePipeline(corpusRoot string, outputIndexPath string) (*IndexMani
 	}()
 
 	// Lane 3: Serialized Mutation / Aggregation (MaxDOP = 1)
-	var allChunks []chunker.Chunk
+	allChunks := make([]chunker.Chunk, 0)
 	newHashes := make(map[string]string)
 	reusedCount := 0
 	reparsedCount := 0
@@ -180,12 +201,12 @@ func RunThreeLanePipeline(corpusRoot string, outputIndexPath string) (*IndexMani
 
 	elapsed := time.Since(start).Milliseconds()
 	manifest := &IndexManifest{
-		Version:            "3.0.0",
+		Version:            "3.3.0",
 		GeneratedAt:        time.Now().UTC().Format(time.RFC3339),
 		TotalFiles:         len(newHashes),
 		ReusedCachedFiles:  reusedCount,
 		ReparsedDeltaFiles: reparsedCount,
-		SkippedLargeFiles:  skippedLarge,
+		SkippedLargeFiles:  int(skippedLarge.Load()),
 		TotalChunks:        len(allChunks),
 		ElapsedMillis:      elapsed,
 		FileHashes:         newHashes,

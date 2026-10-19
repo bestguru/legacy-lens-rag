@@ -11,7 +11,7 @@
   "security_rbac_enforced": true,
   "agentic_subqueries_count": 2,
   "finops_token_savings_pct": 99.89,
-  "scale_5000_chunks_latency_ms": 19.34,
+  "scale_5000_chunks_latency_ms": 17.49,
   "scale_5000_candidates_evaluated": 103,
   "ha_circuit_breaker_state": "OPEN",
   "incremental_manifest_checksum": "d29ae86ffdb6aa7f8c779e9a"

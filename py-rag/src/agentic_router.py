@@ -17,7 +17,7 @@ from __future__ import annotations
 import hashlib
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import List
 
 from .retriever import HybridCodeWikiRetriever, RULE_ID_PATTERN, RetrievalHit
@@ -125,13 +125,16 @@ class AgenticQueryOrchestrator:
                     if added_for_sq >= per_sub_k:
                         break
 
-        final_hits = merged_hits[:top_k]
+        raw_final_hits = merged_hits[:top_k]
 
         total_redactions = 0
         ontology_paths: List[str] = []
-        for h in final_hits:
-            _, red_cnt = EnterpriseSecurityGuardrail.redact_sensitive_text(h.chunk.content)
+        final_hits: List[RetrievalHit] = []
+        for h in raw_final_hits:
+            sanitized_content, red_cnt = EnterpriseSecurityGuardrail.redact_sensitive_text(h.chunk.content)
             total_redactions += red_cnt
+            sanitized_chunk = replace(h.chunk, content=sanitized_content)
+            final_hits.append(replace(h, chunk=sanitized_chunk))
             for p in h.ontology_paths:
                 if p not in ontology_paths:
                     ontology_paths.append(p)
