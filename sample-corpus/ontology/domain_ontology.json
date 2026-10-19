@@ -1,0 +1,92 @@
+{
+  "ontology_name": "EnterpriseLegacyModernizationOntology",
+  "version": "3.2.0",
+  "description": "Formal Enterprise Domain Ontology governing Ubiquitous Language concepts, code artifacts, business rules (BR-*), and architecture decision records (ADR-*) across Telecom NMS/OSS and Financial Advisory domains.",
+  "entity_classes": {
+    "CodeArtifact": {
+      "description": "Executable source code constructs (Classes, Methods, Stored Procedures).",
+      "subclasses": ["Class", "Method", "BatchWriter", "SessionManager"]
+    },
+    "BusinessRule": {
+      "description": "Deterministic operational or compliance constraints extracted from legacy code and specs.",
+      "subclasses": ["AccessPolicyRule", "NetworkSessionRule", "FinancialRiskRule", "DatabasePersistenceRule"]
+    },
+    "ArchitectureDecision": {
+      "description": "Formal Architecture Decision Records (ADR-*) governing To-Be system design.",
+      "subclasses": ["ConcurrencyADR", "ProtocolEngineADR"]
+    },
+    "DomainConcept": {
+      "description": "Canonical Ubiquitous Language concepts with cross-lingual (KO/EN) and symbol mappings.",
+      "subclasses": ["SecurityConcept", "ConcurrencyConcept", "FinanceConcept", "ProtocolConcept"]
+    }
+  },
+  "predicates": {
+    "ENFORCES_RULE": {
+      "domain": "CodeArtifact",
+      "range": "BusinessRule",
+      "weight": 1.0,
+      "description": "Source code artifact directly implements or enforces a business rule."
+    },
+    "GOVERNS_RULE": {
+      "domain": "ArchitectureDecision",
+      "range": "BusinessRule",
+      "weight": 1.0,
+      "description": "ADR establishes the architectural rationale or constraint governing a business rule."
+    },
+    "GOVERNS_COMPONENT": {
+      "domain": "ArchitectureDecision",
+      "range": "CodeArtifact",
+      "weight": 0.9,
+      "description": "ADR governs the structural design of a code component."
+    },
+    "DEPENDS_ON_SYMBOL": {
+      "domain": "CodeArtifact",
+      "range": "CodeArtifact",
+      "weight": 0.65,
+      "description": "Code artifact invokes or references another code symbol."
+    },
+    "REQUIRES_CONCEPT": {
+      "domain": "BusinessRule",
+      "range": "DomainConcept",
+      "weight": 0.85,
+      "description": "Business rule depends on a canonical Ubiquitous Language domain concept."
+    }
+  },
+  "canonical_concepts": [
+    {
+      "id": "CONCEPT:BastionJumpHost",
+      "subclass": "SecurityConcept",
+      "en_labels": ["bastion", "jump host", "kam ssh", "mode3_kam_ssh"],
+      "ko_labels": ["우회서버", "우회접속", "점프호스트", "배스천"],
+      "bound_rules": ["BR-POL-002", "BR-NET-401", "BR-NET-402"]
+    },
+    {
+      "id": "CONCEPT:PrivilegeTierEnforcement",
+      "subclass": "SecurityConcept",
+      "en_labels": ["privilege level", "configure terminal", "authorization", "operator tier"],
+      "ko_labels": ["권한레벨", "권한등급", "설정모드", "운용자권한"],
+      "bound_rules": ["BR-POL-001", "BR-POL-002", "BR-POL-003"]
+    },
+    {
+      "id": "CONCEPT:ThreeLaneDataflowIsolation",
+      "subclass": "ConcurrencyConcept",
+      "en_labels": ["tpl dataflow", "mutation lane", "maxdop", "actionblock"],
+      "ko_labels": ["3레인", "동시성파이프라인", "직렬화레인"],
+      "bound_rules": ["ADR-001", "BR-NET-401", "BR-DB-501"]
+    },
+    {
+      "id": "CONCEPT:HeadlessTerminalStateEngine",
+      "subclass": "ProtocolConcept",
+      "en_labels": ["headless vt100", "ansi parser", "control.refresh", "repaint bottleneck"],
+      "ko_labels": ["헤드리스엔진", "터미널에뮬레이터", "화면갱신병목"],
+      "bound_rules": ["ADR-002", "BR-NET-403"]
+    },
+    {
+      "id": "CONCEPT:VolatilityCircuitBreaker",
+      "subclass": "FinanceConcept",
+      "en_labels": ["robo-advisor", "portfolio drift", "vix threshold", "rebalance"],
+      "ko_labels": ["로보어드바이저", "포트폴리오리밸런싱", "변동성서킷브레이커", "허용편차"],
+      "bound_rules": ["BR-FIN-101", "BR-FIN-102", "BR-FIN-103"]
+    }
+  ]
+}

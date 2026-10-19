@@ -1,12 +1,14 @@
 {
-  "version": "3.0.0",
-  "total_gates": 15,
-  "gates_passed": 15,
+  "version": "3.2.0",
+  "total_gates": 16,
+  "gates_passed": 16,
   "recall_at_1": 1.0,
   "recall_at_3": 1.0,
   "mrr": 1.0,
   "citation_faithfulness": 1.0,
-  "scale_5000_chunks_latency_ms": 11.35,
+  "ontology_typed_triples": 66,
+  "ontology_schema_compliance": true,
+  "scale_5000_chunks_latency_ms": 16.33,
   "scale_5000_candidates_evaluated": 103,
   "ha_circuit_breaker_state": "OPEN",
   "incremental_manifest_checksum": "d29ae86ffdb6aa7f8c779e9a"

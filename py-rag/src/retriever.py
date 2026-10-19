@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
+from .ontology import DomainOntologyEngine
 from .providers import EmbeddingProvider, LocalDeterministicEmbedder, expand_and_tokenize
 
 
@@ -52,12 +53,13 @@ class RetrievalHit:
     dense_score: float
     graph_boost: float = 0.0
     linked_neighbors: List[str] = field(default_factory=list)
+    ontology_paths: List[str] = field(default_factory=list)
     candidates_evaluated: int = 0
 
 
 class HybridCodeWikiRetriever:
     """
-    Enterprise 3-Way Hybrid GraphRAG Retriever with Two-Stage Inverted Index Pruning & LRU Cache.
+    Enterprise Ontology-Driven 3-Way Hybrid GraphRAG Retriever with Two-Stage Inverted Index Pruning & LRU Cache.
     """
 
     def __init__(
@@ -86,6 +88,10 @@ class HybridCodeWikiRetriever:
         self.symbol_to_referencing_chunks: Dict[str, List[int]] = {}
 
         self._build_inverted_and_graph_index()
+
+        # Build typed Enterprise Domain Ontology Knowledge Graph over ingested chunks
+        self.ontology = DomainOntologyEngine()
+        self.ontology.build_knowledge_graph_from_chunks(self.chunks)
 
         self.embedder: EmbeddingProvider = embedder or LocalDeterministicEmbedder(
             doc_freqs=self.doc_freqs, total_docs=len(self.chunks)
@@ -241,12 +247,13 @@ class HybridCodeWikiRetriever:
         query_tokens = expand_and_tokenize(query)
         query_vec = self.embedder.embed_text(query)
         mentioned_rules = {r.upper() for r in RULE_ID_PATTERN.findall(query)}
+        _, ontology_inferred_rules = self.ontology.resolve_query_concepts(query)
 
         # Stage 1: Inverted Index Candidate Pruning
-        candidate_indices = self._prune_candidate_indices(query_tokens, mentioned_rules)
+        candidate_indices = self._prune_candidate_indices(query_tokens, mentioned_rules | ontology_inferred_rules)
         num_evaluated = len(candidate_indices)
 
-        # Stage 2: Exact BM25 + Dense Vector + 1-Hop GraphRAG Scoring on Candidate Pool
+        # Stage 2: Exact BM25 + Dense Vector + 1-Hop Ontology-Driven GraphRAG Scoring on Candidate Pool
         bm25_scores = {i: self._score_bm25_fast(query_tokens, i) for i in candidate_indices}
         dense_scores = {i: self._cosine_sim(query_vec, self.dense_vectors[i]) for i in candidate_indices}
 
@@ -276,6 +283,8 @@ class HybridCodeWikiRetriever:
             chunk_rules = {r.upper() for r in chunk.rule_ids}
             if mentioned_rules and (mentioned_rules & chunk_rules):
                 g_boost += 0.05
+            elif ontology_inferred_rules and (ontology_inferred_rules & chunk_rules):
+                g_boost += 0.012
 
             if idx in graph_connected_to_seed:
                 g_boost += 0.008
@@ -291,6 +300,7 @@ class HybridCodeWikiRetriever:
                     dense_score=round(dense_scores[idx], 4),
                     graph_boost=round(g_boost, 4),
                     linked_neighbors=self.get_one_hop_neighbors(idx),
+                    ontology_paths=self.ontology.trace_reasoning_paths_for_chunk(chunk),
                     candidates_evaluated=num_evaluated,
                 )
             )
