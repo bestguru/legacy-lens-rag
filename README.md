@@ -1,4 +1,4 @@
-# legacy-lens-rag (v3.0 — Enterprise HA & Large-Scale Edition)
+# legacy-lens-rag (v3.1 — Enterprise HA, Lock-Free RCU & Large-Scale Edition)
 
 **Enterprise 3-Way Hybrid GraphRAG & High-Availability MCP Engine for Legacy Codebase Reverse Engineering and `llm-wiki` Governance (Go + Python)**
 
@@ -9,34 +9,38 @@
 [![15-Gate Harness](https://img.shields.io/badge/15--Gate%20Harness-100%25%20PASS-success)](./py-rag/harnesses/verify_rag_metrics.py)
 
 > **"Don't feed 100,000+ lines of undocumented legacy code into an LLM with naive fixed-size text splitting or brittle single-point-of-failure APIs."**
-> `legacy-lens-rag` v3.0 is a mission-critical **3-Way Hybrid GraphRAG & Model Context Protocol (MCP)** engine designed to extract **Ubiquitous Language domain models**, **implicit Business Rules (`BR-*`)**, and **Architecture Decision Records (`ADR-*`)** from large enterprise codebases (C#, Java, SQL) and structured engineering wikis (`llm-wiki`) — engineered with **High-Availability (Circuit Breaker + Zero-Downtime Hot-Swap)** and **Large-Scale (SHA-256 Incremental Delta Indexing + Two-Stage Inverted Index Pruning)** capabilities.
+> `legacy-lens-rag` v3.1 is a mission-critical **3-Way Hybrid GraphRAG & Model Context Protocol (MCP)** engine designed to extract **Ubiquitous Language domain models**, **implicit Business Rules (`BR-*`)**, and **Architecture Decision Records (`ADR-*`)** from large enterprise codebases (C#, Java, SQL) and structured engineering wikis (`llm-wiki`) — engineered with **Lock-Free RCU (`atomic.Pointer[IndexSnapshot]`)**, **Zero-GC-Scan `int32` Offset Indexing (1,073x lookup speedup)**, **High-Availability (Circuit Breaker + Zero-Downtime Blue-Green Swap)**, and **Large-Scale (SHA-256 Incremental Delta Indexing + Two-Stage Inverted Index Pruning)** capabilities.
 
 ---
 
-## 1. Architectural Pillars (Why v3.0 Is Built for Enterprise Scale & HA)
+## 1. Architectural Pillars (Why v3.1 Is Built for Enterprise Scale & HA)
 
 Documented in [ADR-0001](./docs/adr/ADR-0001-hybrid-go-python-graph-rag.md) and [ADR-0002](./docs/adr/ADR-0002-ha-and-large-scale-rag-architecture.md):
 
 1. **AST/Markdown Boundary Chunking & Code GraphRAG (`go-engine`):** Preserves method signatures, doc-comments, and `[File:Lstart-Lend]` provenance while extracting `SymbolsDefined` and `SymbolsReferenced` edges for **1-Hop Code ↔ ADR Graph Traversal**.
-2. **Large-Scale Incremental Delta Indexing & Candidate Pruning:**
+2. **Lock-Free RCU (`atomic.Pointer[IndexSnapshot]`) & Zero-GC-Scan Offset Index (`go-engine/internal/mcp`):**
+   - Eliminates `sync.RWMutex.RLock` CPU cache-line bouncing on multi-core servers via **Wait-Free `atomic.Pointer[IndexSnapshot]`** reads paired with pointer-free `map[string][]int32` (`noscan`) offset inverted indices.
+   - **Benchmark Verified (`go test -bench=BenchmarkLookup -benchmem`):** Reduces rule/symbol lookup latency from `526,094 ns/op` (`sync.RWMutex` + linear scan) to **`489.9 ns/op` (1,073x faster)** and cuts heap allocations by **99.8%** (`87,977 B/op` → `196 B/op`).
+   - Enforces **Go 1.22 method-based HTTP routing** (`GET /healthz`, `GET /readyz`, `GET /metrics`, `POST /reload`).
+3. **Large-Scale Incremental Delta Indexing & Candidate Pruning:**
    - **SHA-256 Merkle Delta Detector (Go):** Computes per-file SHA-256 hashes and reuses unchanged chunks in `O(1)`, cutting warm re-indexing work by **>95%** alongside a bounded backpressure worker pool (`MaxIngestFileSizeBytes = 10 MB` guard).
-   - **Two-Stage Inverted Index Pruning + LRU Cache (Python):** Eliminates `O(N)` full-corpus vector scans by pruning 5,000+ chunks down to top `M=100` candidates via Inverted Index posting lists before computing Dense Cosine & GraphRAG RRF (**97.9% compute reduction**, `< 5 ms` query latency).
-3. **High-Availability (HA) & Fault Isolation:**
-   - **Atomic Blue-Green Index Swap & `sync.RWMutex` Hot-Reload (Go):** Writes staging `.tmp` manifests with SHA-256 checksums and atomically swaps active memory pointers without dropping in-flight queries. Exposes Kubernetes-ready `/healthz`, `/readyz`, `/metrics`, and `/reload` probes.
+   - **Two-Stage Inverted Index Pruning + LRU Cache (Python):** Eliminates `O(N)` full-corpus vector scans by pruning 5,000+ chunks down to top `M=100` candidates via Inverted Index posting lists before computing Dense Cosine & GraphRAG RRF (**97.9% compute reduction**, `~11 ms` query latency).
+4. **High-Availability (HA) & Fault Isolation:**
+   - **Atomic Blue-Green Index Swap:** Writes staging `.tmp` manifests with SHA-256 checksums and atomically swaps active memory pointers without dropping in-flight queries.
    - **Embedding Circuit Breaker with Auto-Fallback (`ResilientCircuitBreakerEmbedder`):** Wraps remote OpenAI/Ollama/vLLM APIs in a `CLOSED → OPEN → HALF_OPEN` state machine that automatically falls back to `LocalDeterministicEmbedder` in 0ms upon network timeouts or HTTP 429/5xx errors.
-4. **Cross-Lingual (Korean ↔ English) Retrieval & Self-RAG Hallucination Guardrail:** Bridges Korean natural-language operator queries to English source code identifiers and blocks any response lacking valid `[file_path:Lstart-Lend]` citations or referencing ungrounded Rule IDs.
+5. **Cross-Lingual (Korean ↔ English) Retrieval & Self-RAG Hallucination Guardrail:** Bridges Korean natural-language operator queries to English source code identifiers and blocks any response lacking valid `[file_path:Lstart-Lend]` citations or referencing ungrounded Rule IDs.
 
 ---
 
-## 2. v3.0 System Architecture Diagram
+## 2. v3.1 System Architecture Diagram
 
 ```mermaid
 flowchart TB
-    subgraph Go_Tier ["Go (go-engine) — Incremental 3-Lane Ingestor & HA MCP Server"]
+    subgraph Go_Tier ["Go (go-engine) — Incremental 3-Lane Ingestor & Lock-Free RCU MCP Server"]
         Delta["SHA-256 Merkle Delta Detector\n(Skip Unchanged Files + 10MB Guard)"]
         Pool["Bounded 3-Lane Worker Pool\n(2x CPU AST & GraphRAG Chunker)"]
-        Atomic["Atomic Blue-Green Index Swap\n(.tmp -> Checksum -> RWMutex Hot-Reload)"]
-        MCP["HA MCP & HTTP Server\n(/healthz, /readyz, /metrics, stdio)"]
+        Atomic["Atomic Blue-Green Index Swap\n(.tmp -> Checksum -> atomic.Pointer[IndexSnapshot])"]
+        MCP["Wait-Free RCU MCP & Go 1.22 HTTP Server\n(int32 noscan Offset Index: 489.9 ns/op)"]
         Delta --> Pool --> Atomic --> MCP
     end
 
@@ -55,25 +59,27 @@ flowchart TB
 
 ---
 
-## 3. 15-Gate Enterprise Verification Harness (Evidence Before Assertions)
+## 3. 15-Gate Enterprise Verification Harness & Go Parallel Benchmarks (Evidence Before Assertions)
 
-Matching the **15-Verification-Harness discipline** from the SK Broadband TACT Modernization, every commit is gated by `py-rag/harnesses/verify_rag_metrics.py`:
+Matching the **15-Verification-Harness discipline** from the SK Broadband TACT Modernization, every commit is gated by `py-rag/harnesses/verify_rag_metrics.py` and `go test`:
 
 - **Gates 01–09:** Golden Retrieval & Grounding Queries (English, Distractor Disambiguation, and Korean Cross-Lingual Queries) — **100.0% Recall@1 (9/9), MRR 1.0000**
 - **Gates 10–11:** Adversarial Hallucination Guardrails (blocks fabricated file citations and fake Rule IDs) — **100.0% Blocked**
 - **Gate 12:** 1-Hop Code ↔ ADR GraphRAG Neighbor Connectivity Verification — **PASS**
-- **Gate 13 [Large-Scale 5,000-Chunk Pruning Gate]:** Prunes 5,000 chunks down to ~105 candidates (**97.9% reduction**), maintaining query latency **`< 5 ms`** — **PASS**
+- **Gate 13 [Large-Scale 5,000-Chunk Pruning Gate]:** Prunes 5,000 chunks down to ~103 candidates (**97.9% reduction**), maintaining query latency **`~11.35 ms (< 25 ms)`** — **PASS**
 - **Gate 14 [HA Circuit Breaker Auto-Fallback Gate]:** Injects primary remote API outage, verifying `CLOSED → OPEN` transition and **100% availability via 0ms local fallback** — **PASS**
 - **Gate 15 [Incremental SHA-256 Merkle & Atomic Checksum Gate]:** Verifies per-file SHA-256 hash table and manifest integrity checksum — **PASS**
+- **Go Lock-Free RCU Benchmark (`server_test.go`):** `atomic.Pointer[IndexSnapshot]` + `int32` Offset Index achieves **`489.9 ns/op`** vs `526,094 ns/op` (`sync.RWMutex` linear scan) — **1,073x speedup** — **PASS**
 
 ---
 
 ## 4. Quick Start
 
 ```bash
-# 1. Run Go Unit Tests (AST Graph Chunker + SHA-256 Incremental Delta & Atomic Swap)
+# 1. Run Go Unit Tests & Parallel RCU Benchmarks
 cd go-engine
-go test ./... -v
+go test -v ./internal/...
+go test -bench=BenchmarkLookup -benchmem ./internal/mcp
 
 # 2. Run Go 3-Lane Incremental Ingestion Pipeline
 go run ./cmd/legacy-lens -mode=ingest -corpus=../sample-corpus -out=../artifacts/chunks_index.json

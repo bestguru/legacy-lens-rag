@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -33,30 +34,97 @@ type JSONRPCResponse struct {
 	Error   interface{} `json:"error,omitempty"`
 }
 
-// Server exposes the indexed chunks with RWMutex Zero-Downtime Hot-Swap and HA observability endpoints.
-type Server struct {
-	mu               sync.RWMutex
+// IndexSnapshot is an immutable, pre-indexed snapshot swapped atomically via sync/atomic.Pointer[IndexSnapshot]
+// (Lock-Free Read-Copy-Update / RCU pattern).
+//
+// GC Optimization: RuleOffsets and SymbolOffsets store pointer-free []int32 slice offsets into Chunks
+// rather than duplicating Chunk structs or pointers. Go's runtime allocator places []int32 backing arrays
+// in `noscan` spans, reducing Garbage Collector mark-phase traversal overhead to near zero.
+type IndexSnapshot struct {
 	Chunks           []chunker.Chunk
 	ManifestChecksum string
-	IndexPath        string
-	PythonCliPath    string
-	TotalRequests    atomic.Int64
-	HotSwapCount     atomic.Int64
-	StartedAt        time.Time
+	RuleOffsets      map[string][]int32
+	SymbolOffsets    map[string][]int32
+	LoadedAt         time.Time
+}
+
+// BuildIndexSnapshot constructs an immutable IndexSnapshot with O(1) int32 offset inverted maps.
+func BuildIndexSnapshot(chunks []chunker.Chunk, checksum string) *IndexSnapshot {
+	ruleOffsets := make(map[string][]int32, len(chunks)*2)
+	symbolOffsets := make(map[string][]int32, len(chunks)*2)
+
+	appendUnique := func(m map[string][]int32, key string, idx int32) {
+		k := strings.ToUpper(strings.TrimSpace(key))
+		if k == "" {
+			return
+		}
+		existing := m[k]
+		if !slices.Contains(existing, idx) {
+			m[k] = append(existing, idx)
+		}
+	}
+
+	for i, c := range chunks {
+		idx := int32(i)
+		for _, r := range c.RuleIDs {
+			appendUnique(ruleOffsets, r, idx)
+		}
+		appendUnique(symbolOffsets, c.Symbol, idx)
+		for _, sym := range c.SymbolsDefined {
+			appendUnique(symbolOffsets, sym, idx)
+		}
+		for _, sym := range c.SymbolsReferenced {
+			appendUnique(symbolOffsets, sym, idx)
+		}
+	}
+
+	return &IndexSnapshot{
+		Chunks:           chunks,
+		ManifestChecksum: checksum,
+		RuleOffsets:      ruleOffsets,
+		SymbolOffsets:    symbolOffsets,
+		LoadedAt:         time.Now(),
+	}
+}
+
+// Server exposes indexed chunks using an Asymmetric Lock-Free RCU architecture:
+//   - Read Path: 100% Wait-Free atomic.Pointer[IndexSnapshot].Load() (zero RWMutex readerCount cache-line bouncing).
+//   - Write Path: Coalesced reloadMu guard preventing reload stampedes while building the new immutable snapshot off-lock.
+type Server struct {
+	snapshot      atomic.Pointer[IndexSnapshot]
+	reloadMu      sync.Mutex
+	IndexPath     string
+	PythonCliPath string
+	TotalRequests atomic.Int64
+	HotSwapCount  atomic.Int64
+	StartedAt     time.Time
 }
 
 func NewServer(chunks []chunker.Chunk, indexPath string, pythonCliPath string) *Server {
-	return &Server{
-		Chunks:        chunks,
+	s := &Server{
 		IndexPath:     indexPath,
 		PythonCliPath: pythonCliPath,
 		StartedAt:     time.Now(),
 	}
+	s.snapshot.Store(BuildIndexSnapshot(chunks, "initial"))
+	return s
 }
 
-// HotReloadIndex atomically swaps the in-memory chunk slice under RWMutex write lock
-// after reading and validating the newly swapped index manifest on disk (Zero-Downtime Hot-Swap).
+// Snapshot returns the current immutable IndexSnapshot via a single wait-free atomic pointer load.
+func (s *Server) Snapshot() *IndexSnapshot {
+	snap := s.snapshot.Load()
+	if snap == nil {
+		return BuildIndexSnapshot(nil, "")
+	}
+	return snap
+}
+
+// HotReloadIndex builds a fresh immutable IndexSnapshot off the read path and atomically swaps
+// the 8-byte snapshot pointer via atomic.Pointer.Store (0ns reader blocking, zero-downtime RCU).
 func (s *Server) HotReloadIndex() error {
+	s.reloadMu.Lock()
+	defer s.reloadMu.Unlock()
+
 	raw, err := os.ReadFile(s.IndexPath)
 	if err != nil {
 		return err
@@ -65,27 +133,61 @@ func (s *Server) HotReloadIndex() error {
 	if err := json.Unmarshal(raw, &manifest); err != nil {
 		return err
 	}
-	s.mu.Lock()
-	s.Chunks = manifest.Chunks
-	s.ManifestChecksum = manifest.ManifestChecksum
-	s.mu.Unlock()
+
+	newSnap := BuildIndexSnapshot(manifest.Chunks, manifest.ManifestChecksum)
+	s.snapshot.Store(newSnap)
 	s.HotSwapCount.Add(1)
 	return nil
 }
 
-// RegisterHAEndpoints attaches Kubernetes/Enterprise HA probes (/healthz, /readyz, /metrics, /reload).
+// LookupChunks performs a Wait-Free RCU read with O(1) offset map lookup, falling back to substring scan only on miss.
+func (s *Server) LookupChunks(query string) []chunker.Chunk {
+	snap := s.Snapshot()
+	q := strings.ToUpper(strings.TrimSpace(query))
+	if q == "" || len(snap.Chunks) == 0 {
+		return nil
+	}
+
+	// Stage 1: O(1) Lock-Free Offset Map Lookup (RuleOffsets & SymbolOffsets)
+	ruleHits := snap.RuleOffsets[q]
+	symHits := snap.SymbolOffsets[q]
+	if len(ruleHits) > 0 || len(symHits) > 0 {
+		matched := make([]chunker.Chunk, 0, len(ruleHits)+len(symHits))
+		seen := make([]int32, 0, len(ruleHits)+len(symHits))
+		for _, idx := range ruleHits {
+			seen = append(seen, idx)
+			matched = append(matched, snap.Chunks[idx])
+		}
+		for _, idx := range symHits {
+			if !slices.Contains(seen, idx) {
+				seen = append(seen, idx)
+				matched = append(matched, snap.Chunks[idx])
+			}
+		}
+		return matched
+	}
+
+	// Stage 2: Fallback substring scan over immutable snapshot
+	var matched []chunker.Chunk
+	for _, c := range snap.Chunks {
+		if strings.Contains(strings.ToUpper(c.Content), q) || strings.Contains(strings.ToUpper(c.Symbol), q) {
+			matched = append(matched, c)
+		}
+	}
+	return matched
+}
+
+// RegisterHAEndpoints attaches Go 1.22 method-aware HTTP probes (GET /healthz, GET /readyz, GET /metrics, POST /reload).
 func (s *Server) RegisterHAEndpoints(mux *http.ServeMux) {
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"status":"healthy","version":"3.0.0"}`))
+		_, _ = w.Write([]byte(`{"status":"healthy","version":"3.1.0","concurrency_model":"lock_free_rcu_atomic_pointer"}`))
 	})
 
-	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
-		s.mu.RLock()
-		count := len(s.Chunks)
-		checksum := s.ManifestChecksum
-		s.mu.RUnlock()
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+		snap := s.Snapshot()
+		count := len(snap.Chunks)
 		w.Header().Set("Content-Type", "application/json")
 		if count == 0 {
 			w.WriteHeader(http.StatusServiceUnavailable)
@@ -93,19 +195,19 @@ func (s *Server) RegisterHAEndpoints(mux *http.ServeMux) {
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, `{"ready":true,"indexed_chunks":%d,"manifest_checksum":"%s"}`, count, checksum)
+		fmt.Fprintf(w, `{"ready":true,"indexed_chunks":%d,"indexed_rules":%d,"manifest_checksum":"%s"}`,
+			count, len(snap.RuleOffsets), snap.ManifestChecksum)
 	})
 
-	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
-		s.mu.RLock()
-		count := len(s.Chunks)
-		s.mu.RUnlock()
+	mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, r *http.Request) {
+		snap := s.Snapshot()
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"total_requests":%d,"hot_swap_count":%d,"indexed_chunks":%d,"uptime_sec":%d}`,
-			s.TotalRequests.Load(), s.HotSwapCount.Load(), count, int(time.Since(s.StartedAt).Seconds()))
+		fmt.Fprintf(w, `{"total_requests":%d,"hot_swap_count":%d,"indexed_chunks":%d,"indexed_rules":%d,"indexed_symbols":%d,"uptime_sec":%d}`,
+			s.TotalRequests.Load(), s.HotSwapCount.Load(), len(snap.Chunks), len(snap.RuleOffsets), len(snap.SymbolOffsets), int(time.Since(s.StartedAt).Seconds()))
 	})
 
-	mux.HandleFunc("/reload", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /reload", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
 		if err := s.HotReloadIndex(); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			fmt.Fprintf(w, `{"reloaded":false,"error":"%v"}`, err)
@@ -146,7 +248,7 @@ func (s *Server) HandleRequest(req JSONRPCRequest) JSONRPCResponse {
 				"protocolVersion": "2024-11-05",
 				"serverInfo": map[string]string{
 					"name":    "legacy-lens-rag-mcp-ha",
-					"version": "3.0.0",
+					"version": "3.1.0",
 				},
 				"capabilities": map[string]interface{}{
 					"tools": map[string]bool{"listChanged": true},
@@ -161,7 +263,7 @@ func (s *Server) HandleRequest(req JSONRPCRequest) JSONRPCResponse {
 				"tools": []map[string]interface{}{
 					{
 						"name":        "lookup_business_rule",
-						"description": "Thread-safe RWMutex lexical + GraphRAG lookup of extracted legacy business rules (BR-*) and ADRs.",
+						"description": "Wait-Free RCU (atomic.Pointer[IndexSnapshot]) + O(1) int32 offset lookup of legacy business rules (BR-*) and ADRs.",
 						"inputSchema": map[string]interface{}{
 							"type": "object",
 							"properties": map[string]interface{}{
@@ -183,7 +285,7 @@ func (s *Server) HandleRequest(req JSONRPCRequest) JSONRPCResponse {
 					},
 					{
 						"name":        "hot_reload_index",
-						"description": "Performs a zero-downtime RWMutex pointer swap to reload the latest chunks_index.json.",
+						"description": "Performs a wait-free atomic.Pointer[IndexSnapshot] RCU swap to reload the latest chunks_index.json with zero downtime.",
 						"inputSchema": map[string]interface{}{
 							"type":       "object",
 							"properties": map[string]interface{}{},
@@ -227,21 +329,12 @@ func (s *Server) HandleRequest(req JSONRPCRequest) JSONRPCResponse {
 			}
 		}
 
-		query := strings.ToUpper(strings.TrimSpace(callParams.Arguments["rule_id"]))
+		query := callParams.Arguments["rule_id"]
 		if query == "" {
-			query = strings.ToUpper(strings.TrimSpace(callParams.Arguments["query"]))
+			query = callParams.Arguments["query"]
 		}
 
-		s.mu.RLock()
-		snapshot := s.Chunks
-		s.mu.RUnlock()
-
-		var matched []chunker.Chunk
-		for _, c := range snapshot {
-			if strings.Contains(strings.ToUpper(c.Content), query) || strings.Contains(strings.ToUpper(c.Symbol), query) {
-				matched = append(matched, c)
-			}
-		}
+		matched := s.LookupChunks(query)
 		return JSONRPCResponse{
 			JSONRPC: "2.0",
 			ID:      req.ID,
