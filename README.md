@@ -13,7 +13,21 @@
 
 ---
 
-## 1. Architectural Pillars (Why v3.3 Is Built for Enterprise AI Governance, Ontology, Scale & HA)
+## 1. Quantitative Engineering Benchmarks (Baseline vs. `legacy-lens-rag` v3.3)
+
+| Engineering Dimension | Legacy / Naive Baseline | `legacy-lens-rag` v3.3 Architecture | Measured Impact (Verified in CI) |
+| :--- | :--- | :--- | :--- |
+| **Multi-Core MCP Lookup Latency** | `sync.RWMutex.RLock` + `O(N)` Linear Scan (`526,094 ns/op`) | Wait-Free `atomic.Pointer[IndexSnapshot]` RCU + `int32` `noscan` Offset Index | **`489.9 ns/op` (1,073x Faster)** |
+| **Heap Memory & GC Pressure** | `87,977 B/op` (`1,999 allocs/op` per lookup) | Pre-indexed immutable snapshot + pointer-free `[]int32` slices | **`196 B/op` (`2 allocs/op`, 99.8% Reduction)** |
+| **Large-Scale 5,000-Chunk Retrieval** | `O(N)` Full-Corpus Dense Cosine Scan (5,000 vectors) | Stage-1 Inverted Index Posting Pruning + 1-Hop Graph Expansion | **5,000 → 103 Candidates (97.9% Compute Saved, `~17 ms`)** |
+| **LLMOps Prompt Token FinOps** | Full-Repository Context Stuffing (`120,000+` tokens) | Agentic Sub-Query Decomposer + Top-K Grounded Context | **`99.89%` Prompt Token Reduction** |
+| **Domain Knowledge Graph Integrity** | Untyped keyword co-occurrence (prone to Graph Drift) | 4-Class Ontology Metamodel + 66 Typed RDF Triples (`ENFORCES_RULE`, `GOVERNS_RULE`) | **100.0% Schema Compliance (0 Violations)** |
+| **Enterprise Security & Governance** | Unfiltered context & raw credentials sent to LLM | Chunk-Level RBAC (Tier 1~3) + Deterministic IPv4/Secret/Email Redaction | **100.0% Tier-3 Isolation & 3/3 PII Redacted** |
+| **Retrieval Accuracy & Grounding** | Unverified free-text generation | 3-Way Hybrid RRF (BM25 + Dense + Ontology Graph) + Self-RAG Verifier | **Recall@1: `100.0% (9/9)` · MRR: `1.0000` · 18/18 Gates PASS** |
+
+---
+
+## 2. Architectural Pillars (Why v3.3 Is Built for Enterprise AI Governance, Ontology, Scale & HA)
 
 Documented in [ADR-0001](./docs/adr/ADR-0001-hybrid-go-python-graph-rag.md) and [ADR-0002](./docs/adr/ADR-0002-ha-and-large-scale-rag-architecture.md):
 
@@ -22,17 +36,16 @@ Documented in [ADR-0001](./docs/adr/ADR-0001-hybrid-go-python-graph-rag.md) and 
    - Eliminates untyped Graph Drift by returning auditable **Ontology Reasoning Paths** (e.g., `(CodeArtifact:CommandPolicyEngine.EvaluateCommand) --[ENFORCES_RULE]--> (BusinessRule:BR-POL-002) --[REQUIRES_CONCEPT]--> (DomainConcept:CONCEPT:BastionJumpHost)`).
 2. **Enterprise AI Governance — Chunk-Level RBAC & PII/Secret Redaction (`py-rag/src/security.py`):**
    - Enforces **Role-Based Access Control (Tier 1 General / Tier 2 Finance & Trading / Tier 3 Security & Bastion Admin)** at the chunk retrieval layer before context injection, preventing unauthorized roles from accessing restricted security policies (`BR-POL-*`).
-   - Deterministically scrubs hardcoded internal IPv4 addresses (`[REDACTED_IP]`), API keys/passwords/tokens (`[REDACTED_SECRET]`), and PII emails (`[REDACTED_EMAIL]`) before any LLM prompt assembly.
+   - Deterministically scrubs hardcoded internal IPv4 addresses (`[REDACTED_IP]`), API keys/passwords/tokens (`[REDACTED_SECRET]`), and PII emails (`[REDACTED_EMAIL]`) on immutable chunk copies before any LLM prompt assembly.
 3. **Agentic RAG Sub-Query Decomposer & LLMOps FinOps Telemetry (`py-rag/src/agentic_router.py`):**
    - Classifies incoming queries via an **Adaptive Intent Router** (`DIRECT_RULE_LOOKUP` / `ONTOLOGY_HYBRID_GRAPHRAG` / `MULTI_DOMAIN_DECOMPOSITION`).
    - Automatically decomposes cross-domain queries (e.g., comparing C# Bastion session rules with Java Robo-Advisor VIX circuit breakers) into parallel sub-queries, fuses multi-domain evidence, and tracks **LLMOps FinOps token savings (99.89% prompt context reduction vs. naive 250K LOC repository dump)**.
-4. **AST/Markdown Boundary Chunking & Code GraphRAG (`go-engine`):** Preserves method signatures, doc-comments, and `[File:Lstart-Lend]` provenance while extracting `SymbolsDefined` and `SymbolsReferenced` edges for **Multi-Hop Code ↔ Rule ↔ ADR Traversal**.
+4. **AST/Markdown Boundary Chunking & Code GraphRAG (`go-engine/internal/chunker`):** Preserves method signatures, doc-comments, and `[File:Lstart-Lend]` provenance while extracting `SymbolsDefined` and `SymbolsReferenced` edges for **Multi-Hop Code ↔ Rule ↔ ADR Traversal**.
 5. **Lock-Free RCU (`atomic.Pointer[IndexSnapshot]`) & Zero-GC-Scan Offset Index (`go-engine/internal/mcp`):**
    - Eliminates `sync.RWMutex.RLock` CPU cache-line bouncing on multi-core servers via **Wait-Free `atomic.Pointer[IndexSnapshot]`** reads paired with pointer-free `map[string][]int32` (`noscan`) offset inverted indices.
-   - **Benchmark Verified (`go test -bench=BenchmarkLookup -benchmem`):** Reduces rule/symbol lookup latency from `526,094 ns/op` (`sync.RWMutex` + linear scan) to **`489.9 ns/op` (1,073x faster)** and cuts heap allocations by **99.8%** (`87,977 B/op` → `196 B/op`).
    - Enforces **Go 1.22 method-based HTTP routing** (`GET /healthz`, `GET /readyz`, `GET /metrics`, `POST /reload`).
 6. **Large-Scale Incremental Delta Indexing & Candidate Pruning:**
-   - **SHA-256 Merkle Delta Detector (Go):** Computes per-file SHA-256 hashes and reuses unchanged chunks in `O(1)`, cutting warm re-indexing work by **>95%** alongside a bounded backpressure worker pool (`MaxIngestFileSizeBytes = 10 MB` guard).
+   - **SHA-256 Merkle Delta Detector (Go):** Computes per-file SHA-256 hashes, enforces a source/markdown extension whitelist (`supportedIngestExts`) that isolates schema metadata directories (`ontology/`), and reuses unchanged chunks in `O(1)` (**>95% warm re-index savings**).
    - **Two-Stage Inverted Index Pruning + LRU Cache (Python):** Eliminates `O(N)` full-corpus vector scans by pruning 5,000+ chunks down to top `M=100` candidates via Inverted Index posting lists before computing Dense Cosine & Ontology-Guided GraphRAG RRF (**97.9% compute reduction**, `<20 ms` query latency).
 7. **High-Availability (HA) & Fault Isolation:**
    - **Atomic Blue-Green Index Swap:** Writes staging `.tmp` manifests with SHA-256 checksums and atomically swaps active memory pointers without dropping in-flight queries.
@@ -41,12 +54,12 @@ Documented in [ADR-0001](./docs/adr/ADR-0001-hybrid-go-python-graph-rag.md) and 
 
 ---
 
-## 2. v3.3 System Architecture Diagram
+## 3. v3.3 System Architecture Diagram
 
 ```mermaid
 flowchart TB
     subgraph Go_Tier ["Go (go-engine) — Incremental 3-Lane Ingestor & Lock-Free RCU MCP Server"]
-        Delta["SHA-256 Merkle Delta Detector\n(Skip Unchanged Files + 10MB Guard)"]
+        Delta["SHA-256 Merkle Delta Detector\n(Extension Whitelist + 10MB Guard)"]
         Pool["Bounded 3-Lane Worker Pool\n(2x CPU AST & GraphRAG Chunker)"]
         Atomic["Atomic Blue-Green Index Swap\n(.tmp -> Checksum -> atomic.Pointer[IndexSnapshot])"]
         MCP["Wait-Free RCU MCP & Go 1.22 HTTP Server\n(int32 noscan Offset Index: 489.9 ns/op)"]
@@ -57,7 +70,7 @@ flowchart TB
         Router["Agentic Query Orchestrator\n(Intent Router + Sub-Query Decomposer + FinOps)"]
         Onto["Enterprise Domain Ontology Engine\n(66 Typed Triples: Code -> Rule <- ADR -> Concept)"]
         CB["Circuit Breaker Embedder\n(CLOSED/OPEN -> Auto-Fallback to Local)"]
-        Stage1["Stage 1: Inverted Index Pruning\n(O(1) Posting List: 5,000 -> ~100 Candidates)"]
+        Stage1["Stage 1: Inverted Index Pruning\n(O(1) Posting List: 5,000 -> ~103 Candidates)"]
         Stage2["Stage 2: 3-Way Hybrid RRF\n(BM25 + Dense Vector + Ontology GraphRAG)"]
         Sec["Enterprise Security Guardrail\n(Chunk-Level RBAC Tier 1~3 + IP/Secret/PII Redaction)"]
         Guard["Self-RAG Citation Verifier\n([File:Line] & Rule-ID Guardrail)"]
@@ -66,42 +79,93 @@ flowchart TB
         Harness -.->|"GitHub Actions CI"| Guard
     end
 
-    MCP <-->|"Zero-Downtime Bridge"| Stage1
+    MCP <-->|"Zero-Downtime JSON Bridge"| Router
 ```
 
 ---
 
-## 3. 18-Gate Enterprise Verification Harness & Go Parallel Benchmarks (Evidence Before Assertions)
+## 4. Repository Structure
 
-Every commit is gated by `py-rag/harnesses/verify_rag_metrics.py` and `go test`:
-
-- **Gates 01–09:** Golden Retrieval & Grounding Queries (English, Distractor Disambiguation, and Korean Cross-Lingual Queries) — **100.0% Recall@1 (9/9), MRR 1.0000**
-- **Gates 10–11:** Adversarial Hallucination Guardrails (blocks fabricated file citations and fake Rule IDs) — **100.0% Blocked**
-- **Gate 12:** 1-Hop Code ↔ ADR GraphRAG Neighbor Connectivity Verification — **PASS**
-- **Gate 13 [Large-Scale 5,000-Chunk Pruning Gate]:** Prunes 5,000 chunks down to ~103 candidates (**97.9% reduction**), maintaining query latency **`< 25 ms`** — **PASS**
-- **Gate 14 [HA Circuit Breaker Auto-Fallback Gate]:** Injects primary remote API outage, verifying `CLOSED → OPEN` transition and **100% availability via 0ms local fallback** — **PASS**
-- **Gate 15 [Incremental SHA-256 Merkle & Atomic Checksum Gate]:** Verifies per-file SHA-256 hash table and manifest integrity checksum — **PASS**
-- **Gate 16 [Domain Ontology Schema Compliance & Multi-Hop Reasoning Path Gate]:** Validates 100% Domain/Range compliance across 66 typed RDF triples (`ENFORCES_RULE`, `GOVERNS_RULE`, `REQUIRES_CONCEPT`) and multi-hop reasoning path generation — **PASS**
-- **Gate 17 [Enterprise Security RBAC & PII/Secret Redaction Gate]:** Verifies that Tier-1 (General Developer) is blocked from Tier-3 (`BR-POL-*`) security chunks while Tier-3 receives full access, and 3/3 sensitive patterns (`IPv4`, `Password/Secret`, `Email`) are deterministically masked — **PASS**
-- **Gate 18 [Agentic Multi-Query Decomposition & FinOps Telemetry Gate]:** Decomposes a compound cross-domain query (C# Bastion + Java VIX Circuit Breaker) into 2 parallel sub-queries, retrieves both targets, and verifies **99.89% context token savings** — **PASS**
-- **Go Lock-Free RCU Benchmark (`server_test.go`):** `atomic.Pointer[IndexSnapshot]` + `int32` Offset Index achieves **`489.9 ns/op`** vs `526,094 ns/op` (`sync.RWMutex` linear scan) — **1,073x speedup** — **PASS**
+```text
+legacy-lens-rag/
+├── .github/workflows/ci.yml                 # Automated Go Unit Tests + Ingest + Python 18-Gate CI Pipeline
+├── docs/adr/
+│   ├── ADR-0001-hybrid-go-python-graph-rag.md
+│   └── ADR-0002-ha-and-large-scale-rag-architecture.md
+├── go-engine/                               # Go 1.22+ High-Throughput Ingestion & Lock-Free RCU MCP Tier
+│   ├── cmd/legacy-lens/main.go              # CLI entrypoint (-mode ingest | -mode mcp)
+│   └── internal/
+│       ├── chunker/chunker.go               # Brace-balanced AST & Markdown section chunker + symbol graph extractor
+│       ├── ingest/pipeline.go               # 3-Lane worker pool, SHA-256 Merkle delta & Blue-Green atomic writer
+│       └── mcp/server.go                    # Wait-Free atomic.Pointer[IndexSnapshot] RCU + int32 noscan offset index
+├── py-rag/                                  # Python 3.12+ Ontology GraphRAG, Agentic Router & Security Tier
+│   ├── src/
+│   │   ├── ontology.py                      # 4-Class Domain Ontology metamodel & multi-hop reasoning path engine
+│   │   ├── security.py                      # Chunk-Level RBAC (Tier 1~3) & deterministic IPv4/Secret/PII redaction
+│   │   ├── agentic_router.py                # Intent router, multi-query decomposer & LLMOps FinOps token telemetry
+│   │   ├── retriever.py                     # 2-Stage Inverted Index Pruning + 3-Way Hybrid RRF + Circuit Breaker
+│   │   ├── verifier.py                      # Self-RAG [File:Line] provenance & Rule-ID hallucination guardrail
+│   │   └── cli_query.py                     # Go-to-Python JSON bridge (--index, --query, --role-tier)
+│   └── harnesses/verify_rag_metrics.py      # Deterministic 18-Gate Enterprise Verification Harness
+└── sample-corpus/                           # Enterprise C#, Java, ADR Wiki & Formal Domain Ontology Corpus
+    ├── code/                                # C# NOC Bastion/Policy/Dapper & Java Robo-Advisor services
+    ├── llm-wiki/                            # ADR-001 (3-Lane Dataflow) & ADR-002 (Headless VT100 Engine)
+    └── ontology/domain_ontology.json        # Formal Enterprise Ontology Schema (Classes, Predicates, Rules, Concepts)
+```
 
 ---
 
-## 4. Quick Start
+## 5. 18-Gate Enterprise Verification Harness Output (Evidence Before Assertions)
+
+Every push to `main` executes `py-rag/harnesses/verify_rag_metrics.py` and `go test`:
+
+```text
+============================================================================================
+ LEGACY-LENS-RAG v3.3 : 18-GATE ENTERPRISE AI, ONTOLOGY, SECURITY & HA VERIFICATION HARNESS
+============================================================================================
+[Loaded Index v3.3.0] 24 AST/Graph chunks | Checksum=d29ae86ffdb6aa7f8c779e9a
+  [PASS] Gate 01 [EN-Policy]       | Rank=1 | RRF=0.0828 (BM25#1, Dense#1, Graph+0.050) -> [code/CommandPolicyEngine.cs:L30-L90]
+  [PASS] Gate 02 [EN-Blocklist]    | Rank=1 | RRF=0.0905 (BM25#1, Dense#2, Graph+0.058) -> [code/CommandPolicyEngine.cs:L7-L29]
+  [PASS] Gate 03 [EN-Finance]      | Rank=1 | RRF=0.0525 (BM25#1, Dense#2, Graph+0.020) -> [code/RoboAdvisorRebalanceService.java:L7-L17]
+  [PASS] Gate 04 [EN-ADR001]       | Rank=1 | RRF=0.0895 (BM25#3, Dense#4, Graph+0.058) -> [llm-wiki/ADR-001-Three-Lane-Dataflow-Pipeline.md:L1-L7]
+  [PASS] Gate 05 [EN-ADR002]       | Rank=1 | RRF=0.0903 (BM25#3, Dense#1, Graph+0.058) -> [llm-wiki/ADR-002-Headless-VT-Engine-Architecture.md:L1-L7]
+  [PASS] Gate 06 [EN-Bastion]      | Rank=1 | RRF=0.0903 (BM25#2, Dense#2, Graph+0.058) -> [code/LegacyTelnetSessionManager.cs:L8-L18]
+  [PASS] Gate 07 [EN-DapperDB]     | Rank=1 | RRF=0.0903 (BM25#2, Dense#2, Graph+0.058) -> [code/AuditLogBatchWriter.cs:L7-L17]
+  [PASS] Gate 08 [KO-CrossLingual] | Rank=1 | RRF=0.0905 (BM25#1, Dense#2, Graph+0.058) -> [code/CommandPolicyEngine.cs:L30-L90]
+  [PASS] Gate 09 [KO-CrossLingual] | Rank=1 | RRF=0.0900 (BM25#2, Dense#3, Graph+0.058) -> [code/RoboAdvisorRebalanceService.java:L7-L17]
+--------------------------------------------------------------------------------------------
+  [PASS] Gate 10 [Guardrail-FakeFile]  | Blocked ungrounded file citation (HALLUCINATED_CITATION)
+  [PASS] Gate 11 [Guardrail-FakeRule]  | Blocked hallucinated rule ID (UNGROUNDED_RULE_ID: 'BR-FAKE-999')
+  [PASS] Gate 12 [GraphRAG-1HopLink]   | Verified Code<->ADR 1-Hop neighbors: ['[code/AuditLogBatchWriter.cs:L7-L17]', ...]
+  [PASS] Gate 13 [Scale-5000-Pruning]  | Pruned 5000 -> 103 candidates (97.9% reduction), Query Latency = 17.49 ms (<25ms)
+  [PASS] Gate 14 [HA-CircuitBreaker]   | Primary API outage tripped state=OPEN, 3/3 requests served via 0ms local fallback
+  [PASS] Gate 15 [Incremental-Merkle]  | Verified SHA-256 Merkle hashes (6 files) & Atomic Checksum=d29ae86ffdb6aa7f8c779e9a
+  [PASS] Gate 16 [Ontology-ReasonPath] | Validated 66 typed RDF triples (0 violations) | Path: (CodeArtifact:CommandPolicyEngine.EvaluateCommand) --[ENFORCES_RULE]--> (BusinessRule:BR-POL-002) --[REQUIRES_CONCEPT]--> (DomainConcept:CONCEPT:BastionJumpHost)
+  [PASS] Gate 17 [Security-RBAC-PII]   | Tier-1 blocked from Tier-3 rule (1 blocked) & 3/3 PII/Secrets redacted
+  [PASS] Gate 18 [Agentic-Decomp-FinOps]| Decomposed into 2 sub-queries -> ['code/LegacyTelnetSessionManager.cs', 'code/RoboAdvisorRebalanceService.java'] | FinOps Token Savings = 99.89%
+============================================================================================
+  RESULT: ALL 18/18 ENTERPRISE AI (ONTOLOGY, RBAC/PII, AGENTIC RAG, FINOPS & HA) GATES PASSED.
+```
+
+---
+
+## 6. Quick Start (Linux / macOS / Windows PowerShell)
 
 ```bash
-# 1. Run Go Unit Tests & Parallel RCU Benchmarks
+# 1. Run Go Unit Tests & Parallel Lock-Free RCU Benchmarks (1,073x speedup verification)
 cd go-engine
 go test -v ./internal/...
 go test -bench=BenchmarkLookup -benchmem ./internal/mcp
 
 # 2. Run Go 3-Lane Incremental Ingestion Pipeline
-go run ./cmd/legacy-lens -mode=ingest -corpus=../sample-corpus -out=../artifacts/chunks_index.json
+go run ./cmd/legacy-lens -mode ingest -corpus ../sample-corpus -out ../artifacts/chunks_index.json
 
 # 3. Run Python 18-Gate Enterprise AI, Ontology, Security & HA Verification Harness
 cd ../py-rag
 python harnesses/verify_rag_metrics.py
+
+# 4. Execute End-to-End Agentic RAG CLI Bridge with RBAC Clearance Tier & Ontology Trace
+python src/cli_query.py --index ../artifacts/chunks_index.json --query "운영 장비 설정 모드 진입 권한 조건 (BR-POL-002)" --role-tier 3
 ```
 
 ---
