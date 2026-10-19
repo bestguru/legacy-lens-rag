@@ -1,9 +1,10 @@
 """
-Pluggable Embedding Providers & Cross-Lingual (Korean <-> English) Enterprise Domain Lexicon.
+Pluggable Embedding Providers, Circuit Breaker Fault Isolation & Cross-Lingual Domain Lexicon (v3.0 HA/Scale).
 Supports:
-1. LocalDeterministicEmbedder (default, zero external API keys, sub-millisecond execution)
-2. OpenAICompatibleEmbedder (activates automatically when OPENAI_API_KEY / OLLAMA_EMBED_URL is set)
-3. Korean-to-English Enterprise Legacy Domain Query Expansion (for Korean operator queries over English codebases)
+1. LocalDeterministicEmbedder (zero external API keys, sub-millisecond execution)
+2. OpenAICompatibleEmbedder (production adapter for OpenAI / Azure / Ollama / vLLM)
+3. ResilientCircuitBreakerEmbedder (HA wrapper: Closed -> Open -> Half-Open state machine that
+   automatically falls back to LocalDeterministicEmbedder on external API timeout or 5xx/429 failure)
 """
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ import json
 import math
 import os
 import re
+import time
 import urllib.request
 from typing import Dict, List, Protocol, Tuple
 
@@ -47,12 +49,10 @@ def expand_and_tokenize(text: str) -> List[str]:
         lower_tok = tok.lower()
         expanded.append(lower_tok)
 
-        # Split CamelCase / PascalCase identifiers
         camel_parts = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", tok).lower().split()
         if len(camel_parts) > 1:
             expanded.extend(camel_parts)
 
-        # Cross-lingual Korean -> English code concept expansion
         for ko_key, en_terms in KOREAN_ENGLISH_DOMAIN_LEXICON.items():
             if ko_key in lower_tok:
                 expanded.extend(en_terms)
@@ -70,7 +70,7 @@ class EmbeddingProvider(Protocol):
 class LocalDeterministicEmbedder:
     """
     Feature-hashed character N-gram + IDF-weighted semantic token random projection embedder.
-    100% deterministic, zero network dependency, ideal for CI regression harnesses.
+    100% deterministic, zero network dependency, acts as both CI embedder and HA fallback engine.
     """
 
     def __init__(self, doc_freqs: Dict[str, int], total_docs: int, vector_dim: int = 256) -> None:
@@ -109,7 +109,6 @@ class LocalDeterministicEmbedder:
 class OpenAICompatibleEmbedder:
     """
     Production adapter for OpenAI / Azure OpenAI / Ollama / vLLM `/v1/embeddings` endpoints.
-    Uses standard library `urllib.request` to avoid heavy SDK bloat.
     """
 
     def __init__(
@@ -117,12 +116,16 @@ class OpenAICompatibleEmbedder:
         api_key: str | None = None,
         base_url: str = "https://api.openai.com/v1/embeddings",
         model: str = "text-embedding-3-small",
+        timeout_sec: float = 2.0,
     ) -> None:
         self.api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
         self.base_url = os.environ.get("OPENAI_EMBED_BASE_URL", base_url)
         self.model = model
+        self.timeout_sec = timeout_sec
 
     def embed_text(self, text: str) -> List[float]:
+        if not self.api_key and "openai.com" in self.base_url:
+            raise ConnectionError("OPENAI_API_KEY not configured for remote OpenAI endpoint.")
         payload = json.dumps({"input": text, "model": self.model}).encode("utf-8")
         req = urllib.request.Request(
             self.base_url,
@@ -133,6 +136,62 @@ class OpenAICompatibleEmbedder:
             },
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urllib.request.urlopen(req, timeout=self.timeout_sec) as resp:
             body = json.loads(resp.read().decode("utf-8"))
             return body["data"][0]["embedding"]
+
+
+class ResilientCircuitBreakerEmbedder:
+    """
+    High-Availability Circuit Breaker Wrapper (Closed -> Open -> Half-Open) for Embedding Providers.
+    Guarantees 100% query availability even when external LLM/Embedding APIs suffer outages or rate-limits:
+    - Tracks consecutive failures against `failure_threshold`.
+    - Trips to OPEN state on threshold breach, bypassing dead network calls and immediately routing to
+      `fallback_provider` (LocalDeterministicEmbedder) with 0ms network wait.
+    - Automatically probes recovery in HALF_OPEN state after `recovery_timeout_sec`.
+    """
+
+    STATE_CLOSED = "CLOSED"
+    STATE_OPEN = "OPEN"
+    STATE_HALF_OPEN = "HALF_OPEN"
+
+    def __init__(
+        self,
+        primary_provider: EmbeddingProvider,
+        fallback_provider: EmbeddingProvider,
+        failure_threshold: int = 2,
+        recovery_timeout_sec: float = 30.0,
+    ) -> None:
+        self.primary = primary_provider
+        self.fallback = fallback_provider
+        self.failure_threshold = failure_threshold
+        self.recovery_timeout_sec = recovery_timeout_sec
+
+        self.state: str = self.STATE_CLOSED
+        self.failure_count: int = 0
+        self.fallback_invocations: int = 0
+        self.last_failure_time: float = 0.0
+
+    def embed_text(self, text: str) -> List[float]:
+        now = time.monotonic()
+
+        if self.state == self.STATE_OPEN:
+            if (now - self.last_failure_time) >= self.recovery_timeout_sec:
+                self.state = self.STATE_HALF_OPEN
+            else:
+                self.fallback_invocations += 1
+                return self.fallback.embed_text(text)
+
+        try:
+            vec = self.primary.embed_text(text)
+            if self.state == self.STATE_HALF_OPEN:
+                self.state = self.STATE_CLOSED
+            self.failure_count = 0
+            return vec
+        except Exception:
+            self.failure_count += 1
+            self.last_failure_time = now
+            self.fallback_invocations += 1
+            if self.failure_count >= self.failure_threshold:
+                self.state = self.STATE_OPEN
+            return self.fallback.embed_text(text)

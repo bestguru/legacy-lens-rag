@@ -1,9 +1,21 @@
 {
-  "version": "1.0.0",
-  "generated_at": "2026-10-19T16:11:44Z",
+  "version": "3.0.0",
+  "generated_at": "2026-10-19T16:43:50Z",
   "total_files": 6,
+  "reused_cached_files": 0,
+  "reparsed_delta_files": 6,
+  "skipped_large_files": 0,
   "total_chunks": 24,
-  "elapsed_ms": 9,
+  "elapsed_ms": 16,
+  "file_hashes": {
+    "code/AuditLogBatchWriter.cs": "6f6b4decd9755a5c3a6601677dab744a935f5c1b96d4f7d217a58fcd6f8b5157",
+    "code/CommandPolicyEngine.cs": "11519c5383cb91f085a5bd6a128cccb120fc2c2a002997c573103de1e3a546d1",
+    "code/LegacyTelnetSessionManager.cs": "9663812815ca965663dbf08f03af73b8338eb29672897f7aabb083407e031624",
+    "code/RoboAdvisorRebalanceService.java": "bd97efde303a7af4ef2a22ad274c3a73cfd5ccdf5a35f950c294ef4acb36f181",
+    "llm-wiki/ADR-001-Three-Lane-Dataflow-Pipeline.md": "5fcac2072db3087b876edd41429ede8752df5ae5c0ee57c7640ae1a1364cdbb3",
+    "llm-wiki/ADR-002-Headless-VT-Engine-Architecture.md": "443699469654ad04e522e30aae7074d6f491b4e102b863334f9a62e0e73128f5"
+  },
+  "manifest_checksum": "d29ae86ffdb6aa7f8c779e9a",
   "chunks": [
     {
       "id": "77ddba93ae77",
